@@ -1,0 +1,183 @@
+name: CI
+
+# THE PULL-REQUEST GATE. Everything here runs with NO SECRETS, so it runs
+# identically on a fork PR and on main. Anything that needs a live database is
+# in `database.yml` and is deliberately not a PR gate — see that file's header
+# for what that costs and why it is unavoidable.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: python — lint, types, tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      # `import app` without installing the distribution. See the Install step.
+      PYTHONPATH: ${{ github.workspace }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      # Installed from the LOCK, not from the pyproject ranges.
+      #
+      # pyproject pins floors only (`fastapi>=0.115` and friends), so a bare
+      # `pip install -e ".[dev]"` resolved whatever was newest on the day and CI
+      # drifted underneath us. That is not hypothetical: FastAPI 0.121 changed
+      # `include_router()` to return a wrapper instead of flattening routes into
+      # `app.routes`, and a test that walked that list passed on 0.136 and failed
+      # on 0.141 with the application serving identically in both. A green build
+      # has to mean the same thing on Monday as it did on Friday.
+      #
+      # `--require-hashes` makes the install verifiable as well as reproducible:
+      # a tampered or substituted artifact fails the install rather than running.
+      # Regenerate after changing a dependency in pyproject.toml:
+      #   uv pip compile pyproject.toml --extra dev --universal \
+      #     --python-version 3.11 --generate-hashes -o requirements-dev.txt
+      #
+      # THERE IS NO `pip install -e .` STEP, AND THAT IS THE POINT.
+      # This used to end with `pip install -e . --no-deps`, which quietly undid
+      # the guarantee the line above buys. `pip install -e .` builds a wheel, and
+      # by default it builds it in an ISOLATED environment that pip populates by
+      # downloading `pyproject.toml`'s build requirement (`setuptools>=68`) from
+      # PyPI — unpinned, unhashed, resolved fresh on every run, executing
+      # arbitrary `setup.py` code at build time. `--require-hashes` covered the
+      # 89 runtime packages and not that one, so the supply-chain claim in this
+      # comment was false for the build backend.
+      #
+      # `--no-build-isolation` is the usual fix and does not apply here:
+      # `requirements-dev.txt` does not pin setuptools (checked), so it would
+      # fall back to whatever `actions/setup-python` happens to preinstall —
+      # unpinned and unhashed again, just from a different source.
+      #
+      # The install was not needed in the first place. Nothing imports the
+      # distribution name; `pyproject.toml` packages `app*`, and every consumer
+      # imports `app.…` from the checkout. `tests/` is a package, so pytest
+      # already prepends the repo root to `sys.path`, and `PYTHONPATH` above
+      # makes that explicit rather than incidental. mypy and ruff read the tree
+      # directly. Removing the step restores the property `--require-hashes` was
+      # bought for: nothing unpinned is fetched in this job.
+      #
+      # If a future change genuinely needs the distribution installed, pin
+      # setuptools INTO requirements-dev.txt with a hash first, then use
+      # `pip install -e . --no-deps --no-build-isolation`.
+      - name: Install
+        run: pip install --require-hashes -r requirements-dev.txt
+
+      - name: ruff
+        run: ruff check .
+
+      - name: black
+        run: black --check .
+
+      # CLAUDE.md §1 hard rules: no float for money, no LLM in the payout engine,
+      # no send-capable tool in an agent toolset, domain layer stays pure, enums
+      # over string literals. Stdlib only, so it would run even without the
+      # install step above. See tools/README.md.
+      - name: rule_linter
+        run: python tools/rule_linter.py
+
+      - name: mypy
+        run: mypy app/
+
+      # Unit tests only. The `integration` and `rls` markers need a live
+      # database: the RLS suite asserts a forbidden read returns zero rows
+      # (CLAUDE.md R5), which only means something against real Postgres
+      # policies. `database.yml` runs those, unfiltered, against the real
+      # project.
+      #
+      # The DB-backed suites that carry NO marker — `tests/api_contract`,
+      # `tests/security`, `tests/rag_eval` — are collected here and skip
+      # themselves when `DATABASE_URL` is unset, which is the state of this job.
+      # That is intended: their non-DB assertions still run, and the skips are
+      # visible in the log rather than silently deselected.
+      - name: pytest
+        run: pytest -m "not integration and not rls"
+
+      # A test that only passes in one order is not a test, it is a coin flip.
+      #
+      # This is a REGRESSION GATE, not a style point. `app/main.py` used to call
+      # `structlog.configure()` as an import side effect, which permanently
+      # disabled `log.debug()` for every module in `app/`; two assertions in
+      # `tests/rag_eval/test_logging.py` passed alone and failed in a full run
+      # depending on whether anything had imported `app.main` first. The root
+      # conftest now resets the process-global state that made that possible,
+      # and this step is what notices if a new leak appears.
+      #
+      # The directory list is computed, not written down, so a new suite is
+      # covered the day it is added rather than the day someone remembers.
+      - name: pytest (suites in reverse order)
+        run: |
+          suites=$(find tests -mindepth 1 -maxdepth 1 -type d ! -name '__pycache__' | sort -r | tr '\n' ' ')
+          echo "order: $suites"
+          pytest -m "not integration and not rls" $suites
+
+  frontend:
+    name: frontend — typecheck, tests, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    # WHY THIS JOB EXISTS
+    # -------------------
+    # It did not, until now. `frontend/package.json` has carried `typecheck`,
+    # `test` and `build` scripts and 186 vitest tests across six files that no
+    # automation ran — including `src/lib/erm.test.ts`, which is where the
+    # query-key cache bug that shipped to a browser was eventually caught by
+    # hand. A test suite nothing runs is documentation with a false claim of
+    # being checked.
+    #
+    # All three steps are pure compute: no database, no Supabase project, no
+    # secrets. `vitest.config.ts` pins deliberately-fake `VITE_SUPABASE_*` values
+    # for the test run (`lib/supabase.ts` throws at module scope without them),
+    # and `vite build` inlines `import.meta.env` at build time without needing
+    # them to be real. So this job is fully available to fork PRs.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # LTS, and above Vite 7's floor (^20.19 || >=22.12). Local development
+          # is on 24; if that gap ever matters, this is the line to change.
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # `npm ci` — not `npm install` — for the same reason the Python job uses a
+      # lock: it installs exactly `package-lock.json` and fails if the lock and
+      # `package.json` disagree, rather than quietly resolving something newer.
+      - name: Install
+        run: npm ci
+
+      - name: typecheck
+        run: npm run typecheck
+
+      - name: vitest
+        run: npm test
+
+      # `tsc -b && vite build`. Runs after the tests so that a type error is
+      # reported as a type error, and last because a bundle that will not build
+      # is the one failure a reviewer cannot work around locally.
+      - name: build
+        run: npm run build

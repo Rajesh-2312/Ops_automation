@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ops Console - byteXL</title>
+
+    <!-- byteXL's own faces. preconnect because the stylesheet request and the
+         font-file request go to two different hosts, and without it the second
+         DNS+TLS round trip does not start until the first has finished.
+         display=swap: this console is read on college wifi, and a blocking font
+         means a blank table where the attendance grid should be. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- Brand mark: byteXL blue (#0060c2), not the stock indigo. -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%230060c2'/><path d='M28 52l14 14 30-32' stroke='%23f8fafd' stroke-width='11' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>" />
+    <meta name="theme-color" content="#0060c2" />
+
+    <!--
+      Theme, resolved BEFORE first paint.
+
+      This has to be an inline blocking script in <head>, not React state. If
+      the theme is applied after hydration, every dark-mode user gets a white
+      flash on every navigation - and on this app that flash lands on a screen
+      full of payout figures, which reads as a failed load rather than a style
+      blink.
+
+      Three states, matching index.css: an explicit 'dark'/'light' stamps
+      data-theme and pins color-scheme; anything else (unset, or a corrupt
+      value) leaves both alone so the OS preference wins. Wrapped in try/catch
+      because localStorage throws outright in a blocked-cookie context, and a
+      theme preference is not worth taking the app down for.
+    -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("bytexl-theme");
+          if (t === "dark" || t === "light") {
+            document.documentElement.setAttribute("data-theme", t);
+            document.documentElement.style.colorScheme = t;
+          }
+        } catch (e) {
+          /* private mode / blocked storage - fall through to the OS default */
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

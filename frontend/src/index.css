@@ -1,0 +1,441 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   Ops Console design tokens — byteXL brand, glacier surfaces.
+
+   PALETTE PROVENANCE. Every brand value below is lifted verbatim from the
+   published byteXL design system (bytexl.ai: --brand, --foreground, --muted,
+   --border, --destructive, --chart-1..5). They are written as hex, not oklch,
+   on purpose: these are contract values shared with a site we do not own, and a
+   converted colour is a colour that has already started drifting. Values we
+   derived — the dark ramp, the glacier tints, the semantic washes — are marked
+   as such, so the next person can tell what is negotiable from what is not.
+
+   TOKEN NAMES ARE LOAD-BEARING. `canvas / surface / ink / accent / line` are
+   referenced by ~17k lines of existing markup. Renaming them to byteXL's own
+   names (`background / foreground / border`) would be a 26-file rewrite that
+   changes nothing on screen. So the names stay and the VALUES re-point: the
+   rebrand is this file, not the app.
+
+   THEME HAS THREE STATES, not two. An explicit choice stamps data-theme on
+   <html>; the default (no stamp) follows the OS. Every colour is therefore
+   defined once on bare :root, so nothing is left undefined when neither branch
+   matches — a token whose only definition lives inside a media query is a token
+   that is transparent for somebody.
+--------------------------------------------------------------------------- */
+
+@theme {
+  /* --- Type -------------------------------------------------------------
+     Inter and Geist Mono are byteXL's own faces. The fallback stack is real,
+     not decorative: this console runs inside college networks that may not
+     reach fonts.gstatic.com, and it has to stay legible when they do not. */
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo,
+    Consolas, "Liberation Mono", monospace;
+
+  /* --- Ground and surfaces ---------------------------------------------
+     Three depths, no more. canvas is the page, surface is a card, surface-2 is
+     a well inside a card (table header, inert chip). A fourth depth is how a
+     dense screen stops reading as a hierarchy and starts reading as noise. */
+  --color-canvas: #f8fafd;        /* byteXL --sidebar: their palest ground */
+  --color-surface: #ffffff;       /* byteXL --card */
+  --color-surface-2: #eff3f8;     /* byteXL --muted */
+  --color-line: #dde4eb;          /* byteXL --border / --input */
+  --color-line-soft: #e8eef4;     /* derived: half-strength divider */
+
+  /* --- Ink --------------------------------------------------------------
+     Three weights: primary reading, secondary label, tertiary metadata. */
+  --color-ink: #102034;           /* byteXL --foreground */
+  --color-ink-2: #5e6a7a;         /* byteXL --muted-foreground */
+  --color-ink-3: #8695a6;         /* derived: lifted, still AA on surface */
+
+  /* --- Accent -----------------------------------------------------------
+     One accent carries every interactive meaning in the app. */
+  --color-accent: #0060c2;        /* byteXL --brand / --primary / --ring */
+  --color-accent-soft: #e3eefa;   /* byteXL --accent */
+  --color-accent-ink: #0d2e55;    /* byteXL --accent-foreground */
+  --color-accent-hover: #004e9e;  /* derived: brand darkened for :hover */
+  --color-on-accent: #f8fafd;     /* byteXL --primary-foreground */
+
+  /* Secondary brand surface — quieter than accent-soft, for chips and rails
+     that should read as chrome rather than as an active selection. */
+  --color-brand-wash: #eaf1f8;     /* byteXL --secondary */
+  --color-brand-wash-ink: #183356; /* byteXL --secondary-foreground */
+
+  /* --- Brand extras -----------------------------------------------------
+     navy is byteXL's deep ground. flame is their warm accent and is RESERVED:
+     it marks generated / AI-drafted surfaces, so a reader can always tell a
+     drafted artefact from a queried fact (CLAUDE.md R1). Do not spend it on
+     decoration — the moment flame means two things it means nothing. */
+  --color-navy: #0b1e36;
+  --color-navy-ink: #f1f6fa;
+  --color-flame: #f96428;
+  --color-flame-soft: #fff1e9;
+  --color-flame-ink: #9f2d00;
+
+  /* --- Semantic tones ---------------------------------------------------
+     Four meanings, and only four: good / warn / bad / info. `bad` is byteXL's
+     own --destructive; the other three are tuned to sit beside it at equal
+     visual weight, which their palette never had to solve because a marketing
+     site has no status pills.
+
+     Each ships as a TRIPLE — mid-tone, wash, ink. The old file named only the
+     mid-tone, so every pill had to invent its own background and text colour
+     from Tailwind literals; that is precisely how 120 raw `bg-emerald-500/12`
+     style declarations accumulated across the pages underneath. A pill is now
+     one lookup, not three guesses. */
+  --color-good: #047e57;
+  --color-good-wash: #e6f6f0;
+  --color-good-ink: #045f42;
+
+  --color-warn: #b45309;
+  --color-warn-wash: #fdf1e3;
+  --color-warn-ink: #8a3f07;
+
+  --color-bad: #e40014;           /* byteXL --destructive */
+  --color-bad-wash: #fdeaec;
+  --color-bad-ink: #a8000f;
+
+  --color-info: #0060c2;          /* the brand blue doubles as informational */
+  --color-info-wash: #e3eefa;
+  --color-info-ink: #0d2e55;
+
+  /* --- Chart ramp -------------------------------------------------------
+     byteXL --chart-1..5 verbatim. Blue, then a warm ramp: categorical at the
+     top, ordinal below it. Do not add a sixth without a reason. */
+  --color-chart-1: #0060c2;
+  --color-chart-2: #fd6e2d;
+  --color-chart-3: #f05100;
+  --color-chart-4: #c53c00;
+  --color-chart-5: #9f2d00;
+
+  /* --- Glacier ----------------------------------------------------------
+     Frosted chrome: sidebar, sticky page header, modal shell, sticky table
+     head. Translucent and blurred, so dense content passing underneath stays
+     sensed but never readable.
+
+     Deliberately NOT applied to cards or table rows. Frosting a surface a
+     reader has to parse numbers on is decoration bought with legibility, and
+     the numbers on this product decide trainer payouts. Glacier is chrome. */
+  --color-glass: rgb(255 255 255 / 0.72);
+  --color-glass-strong: rgb(255 255 255 / 0.88);
+  --color-glass-line: rgb(255 255 255 / 0.6);
+  --blur-glass: 14px;
+
+  /* --- Elevation --------------------------------------------------------
+     Cool-tinted shadow, not neutral black: a grey shadow on a blue-tinted
+     ground reads as dirt. The alpha channel carries navy instead. */
+  --shadow-card: 0 1px 2px rgb(16 32 52 / 0.05);
+  --shadow-card-hover: 0 2px 8px rgb(16 32 52 / 0.08), 0 1px 2px rgb(16 32 52 / 0.05);
+  --shadow-raised: 0 8px 24px rgb(16 32 52 / 0.10), 0 2px 6px rgb(16 32 52 / 0.06);
+  --shadow-glass: 0 1px 0 rgb(255 255 255 / 0.6) inset, 0 1px 3px rgb(16 32 52 / 0.06);
+
+  /* --- Radius -----------------------------------------------------------
+     A named scale, so a card, a modal and a bento tile cannot drift apart. */
+  --radius-control: 0.5rem;   /* input, button, chip */
+  --radius-card: 0.75rem;     /* card, tile */
+  --radius-panel: 1rem;       /* modal, drawer, hero */
+}
+
+/* --- Dark ------------------------------------------------------------------
+   byteXL publishes no dark palette, so this entire ramp is ours. It is built by
+   taking their --navy (#0b1e36) as the deepest ground and stepping up from it,
+   which keeps the dark app recognisably the same brand rather than a generic
+   grey inversion. Hues are preserved; only lightness and chroma move.
+
+   Written once as a custom property list and applied by two selectors, so the
+   OS default and the explicit toggle can never disagree about a value. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-canvas: #0a1727;
+    --color-surface: #102438;
+    --color-surface-2: #18324b;
+    --color-line: #23415d;
+    --color-line-soft: #1b3449;
+
+    --color-ink: #eaf1f8;
+    --color-ink-2: #a9bed4;
+    --color-ink-3: #7d97b0;
+
+    --color-accent: #4d9ff0;
+    --color-accent-soft: #15334f;
+    --color-accent-ink: #a8d0fb;
+    --color-accent-hover: #6fb2f5;
+    --color-on-accent: #071320;
+
+    --color-brand-wash: #16304a;
+    --color-brand-wash-ink: #bcd6ee;
+
+    --color-navy: #061224;
+    --color-navy-ink: #f1f6fa;
+    --color-flame: #ff8351;
+    --color-flame-soft: #3a1c0d;
+    --color-flame-ink: #ffb694;
+
+    --color-good: #34d399;
+    --color-good-wash: #0d3a2c;
+    --color-good-ink: #8ef0cb;
+
+    --color-warn: #fbbf24;
+    --color-warn-wash: #402b0a;
+    --color-warn-ink: #fcd77a;
+
+    --color-bad: #ff6b74;
+    --color-bad-wash: #45151b;
+    --color-bad-ink: #ffb3b8;
+
+    --color-info: #4d9ff0;
+    --color-info-wash: #15334f;
+    --color-info-ink: #a8d0fb;
+
+    --color-chart-1: #4d9ff0;
+    --color-chart-2: #ff8351;
+    --color-chart-3: #ff6a2b;
+    --color-chart-4: #e8703c;
+    --color-chart-5: #c96a48;
+
+    --color-glass: rgb(16 36 56 / 0.72);
+    --color-glass-strong: rgb(16 36 56 / 0.9);
+    --color-glass-line: rgb(120 165 210 / 0.14);
+
+    /* Shadow does almost nothing on a dark ground — depth there comes from the
+       line token. Kept nominal so nothing ever resolves to undefined. */
+    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4);
+    --shadow-card-hover: 0 2px 10px rgb(0 0 0 / 0.5);
+    --shadow-raised: 0 10px 30px rgb(0 0 0 / 0.55);
+    --shadow-glass: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 1px 3px rgb(0 0 0 / 0.4);
+  }
+}
+
+/* The explicit dark choice. Identical values to the block above — duplicated
+   rather than shared via a class, because Tailwind's utilities read these off
+   :root and an indirection layer would have to be re-resolved at every level. */
+:root[data-theme="dark"] {
+  --color-canvas: #0a1727;
+  --color-surface: #102438;
+  --color-surface-2: #18324b;
+  --color-line: #23415d;
+  --color-line-soft: #1b3449;
+
+  --color-ink: #eaf1f8;
+  --color-ink-2: #a9bed4;
+  --color-ink-3: #7d97b0;
+
+  --color-accent: #4d9ff0;
+  --color-accent-soft: #15334f;
+  --color-accent-ink: #a8d0fb;
+  --color-accent-hover: #6fb2f5;
+  --color-on-accent: #071320;
+
+  --color-brand-wash: #16304a;
+  --color-brand-wash-ink: #bcd6ee;
+
+  --color-navy: #061224;
+  --color-navy-ink: #f1f6fa;
+  --color-flame: #ff8351;
+  --color-flame-soft: #3a1c0d;
+  --color-flame-ink: #ffb694;
+
+  --color-good: #34d399;
+  --color-good-wash: #0d3a2c;
+  --color-good-ink: #8ef0cb;
+
+  --color-warn: #fbbf24;
+  --color-warn-wash: #402b0a;
+  --color-warn-ink: #fcd77a;
+
+  --color-bad: #ff6b74;
+  --color-bad-wash: #45151b;
+  --color-bad-ink: #ffb3b8;
+
+  --color-info: #4d9ff0;
+  --color-info-wash: #15334f;
+  --color-info-ink: #a8d0fb;
+
+  --color-chart-1: #4d9ff0;
+  --color-chart-2: #ff8351;
+  --color-chart-3: #ff6a2b;
+  --color-chart-4: #e8703c;
+  --color-chart-5: #c96a48;
+
+  --color-glass: rgb(16 36 56 / 0.72);
+  --color-glass-strong: rgb(16 36 56 / 0.9);
+  --color-glass-line: rgb(120 165 210 / 0.14);
+
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-card-hover: 0 2px 10px rgb(0 0 0 / 0.5);
+  --shadow-raised: 0 10px 30px rgb(0 0 0 / 0.55);
+  --shadow-glass: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 1px 3px rgb(0 0 0 / 0.4);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-line);
+  }
+
+  html {
+    /* Both, so form controls and scrollbars follow the theme. Overridden to a
+       single value by the toggle, which sets style.colorScheme alongside
+       data-theme. */
+    color-scheme: light dark;
+  }
+
+  body {
+    background: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* Inter's disambiguating alternates. cv05/cv08 give l and 1 a tail and a
+       serif — this app puts PANs, IFSC codes and invoice numbers on screen, and
+       a lowercase l that looks like a 1 is a support ticket. tnum keeps rupee
+       columns aligned; zero is slashed for the same reason. */
+    font-feature-settings: "cv05", "cv08", "cv11", "ss01", "tnum", "zero";
+    font-synthesis-weight: none;
+  }
+
+  /* Headings tighten as they grow — the default tracking is set for body copy
+     and looks loose at display sizes. */
+  h1, h2, h3 {
+    letter-spacing: -0.014em;
+  }
+
+  ::selection {
+    background: var(--color-accent-soft);
+    color: var(--color-accent-ink);
+  }
+
+  /* Inputs are used everywhere; style once rather than per-component. */
+  input,
+  select,
+  textarea {
+    background: var(--color-surface);
+    color: var(--color-ink);
+    font-family: inherit;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--color-ink-3);
+  }
+
+  /* Every figure in this app is compared down a column: amounts, day counts,
+     percentages. Proportional digits make that comparison harder for no gain. */
+  .tabular-nums,
+  td,
+  th {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Keyboard focus should be obvious; pointer focus should not shout. */
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-control);
+  }
+}
+
+@layer utilities {
+  /* --- Glacier chrome ---------------------------------------------------
+     `backdrop-filter` is the whole effect, and it is also the one thing that
+     silently fails: where it is unsupported the element falls back to the
+     translucent background alone, which over dense text is unreadable. So the
+     opaque fallback is the DECLARED value and the translucent one is applied
+     only inside the support query. Support is the exception, not the base. */
+  .glass {
+    background: var(--color-surface);
+    border-color: var(--color-line);
+  }
+
+  .glass-strong {
+    background: var(--color-surface);
+    border-color: var(--color-line);
+  }
+
+  @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .glass {
+      background: var(--color-glass);
+      -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+      backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+    }
+    .glass-strong {
+      background: var(--color-glass-strong);
+      -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+      backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+    }
+  }
+
+  /* Kanban columns scroll independently without the page scrolling sideways. */
+  .scroll-slim {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line) transparent;
+  }
+  .scroll-slim::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scroll-slim::-webkit-scrollbar-thumb {
+    background: var(--color-line);
+    border-radius: 99px;
+  }
+  .scroll-slim::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  @keyframes fadeUp {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  .animate-in {
+    animation: fadeUp 0.18s ease-out both;
+  }
+
+  /* A skeleton shimmer for the loading states, so a slow query reads as
+     "arriving" rather than "empty". Two are different answers to the reader. */
+  @keyframes shimmer {
+    100% {
+      transform: translateX(100%);
+    }
+  }
+  .skeleton {
+    position: relative;
+    overflow: hidden;
+    background: var(--color-surface-2);
+    border-radius: var(--radius-control);
+  }
+  .skeleton::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgb(255 255 255 / 0.35),
+      transparent
+    );
+    animation: shimmer 1.4s infinite;
+  }
+
+  /* Motion is decoration here — the modal and the tiles are already legible
+     without it. Anyone who has asked the OS to stop moving things gets the end
+     state immediately rather than a shorter version of the same slide. */
+  @media (prefers-reduced-motion: reduce) {
+    .animate-in,
+    .skeleton::after {
+      animation: none;
+    }
+    *,
+    *::before,
+    *::after {
+      transition-duration: 0.01ms !important;
+    }
+  }
+}

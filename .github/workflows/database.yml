@@ -1,0 +1,158 @@
+name: database
+
+# THE HALF OF THE TEST SUITE THAT NEEDS A REAL POSTGRES.
+#
+# WHY THIS IS NOT A PULL-REQUEST GATE
+# ===================================
+# Read this before "improving" it by adding `pull_request:`.
+#
+# 1. GitHub does not give a fork PR access to secrets. That is not a setting to
+#    flip; it is the boundary that stops a stranger's branch from printing your
+#    service-role key. A `pull_request` trigger here would be green for
+#    maintainers and red-or-skipped for every outside contributor, which is
+#    worse than not running: it makes the check meaningless while looking like a
+#    check. (`pull_request_target` DOES carry secrets — and hands them to code
+#    the PR author controls. Never use it here.)
+#
+# 2. Even with secrets, this job connects to the ONE live Supabase project with
+#    a credential that carries BYPASSRLS. Running that on every push of every PR
+#    means arbitrary branch code executing against production data.
+#
+# So: nightly, on demand, and on merges to main. A regression is caught within a
+# day and always before a release, which is the honest ceiling given (1).
+#
+# WHAT IT WOULD TAKE TO MAKE IT A PR GATE
+# ---------------------------------------
+# A Postgres service container instead of the live project. Feasible in
+# principle — `pgvector/pgvector:pg17` covers the extension `1600_rag_corpora`
+# needs — and blocked in practice on one missing piece: the migrations reference
+# `auth.uid()`, `auth.users`, `storage.objects`, `storage.buckets` and
+# `storage.foldername()`, plus the `anon` / `authenticated` / `service_role`
+# roles, none of which exist in stock Postgres. Supabase supplies them, and this
+# repo does not contain a bootstrap that reproduces them.
+#
+# That bootstrap is the actual unit of work, and it belongs in `supabase/` next
+# to the migrations it has to stay in step with — NOT inline in this file, where
+# it would drift from Supabase's real column list silently and turn the RLS
+# matrix into a test of a schema nobody runs. Until it exists, this trigger set
+# is the correct one, and pretending otherwise would be the worse failure.
+
+on:
+  schedule:
+    # 19:00 UTC = 00:30 IST. After the working day, before the next one.
+    - cron: "0 19 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+# Never two runs against one database. `cancel-in-progress: false` because
+# `run_tests.py` applies migrations inside a transaction and cancelling it
+# mid-apply is how you get a half-migrated project.
+concurrency:
+  group: database
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  live-database:
+    name: RLS matrix + database-backed tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install
+        run: pip install --require-hashes -r requirements-dev.txt
+
+      # A fork, or a repo whose owner has not configured the secrets, must get a
+      # clear notice rather than a red X it cannot act on. Everything after this
+      # step is conditional on the answer.
+      - name: Are database credentials configured?
+        id: creds
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::notice::DATABASE_URL is not configured for this repository, so the RLS matrix and the database-backed suites were skipped. Set the repository secrets DATABASE_URL, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY and SUPABASE_JWT_SECRET to enable them."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # `supabase/tests/run_tests.py` reads DATABASE_URL from the repo-root .env
+      # and deliberately not from argv, so the password cannot land in a shell
+      # history or a process list. Same reason it must not land in a workflow
+      # log: written with a heredoc, never echoed. `app.core.config.Settings`
+      # requires the four SUPABASE_* values, and `tests/api_contract` needs
+      # SUPABASE_JWT_SECRET to mint a token, so the whole set goes in.
+      #
+      # `.env` is gitignored; this file exists only inside the runner.
+      - name: Write .env
+        if: steps.creds.outputs.configured == 'true'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_JWT_SECRET: ${{ secrets.SUPABASE_JWT_SECRET }}
+        run: |
+          umask 077
+          cat > .env <<EOF
+          APP_ENV=dev
+          LOG_LEVEL=INFO
+          DATABASE_URL=$DATABASE_URL
+          SUPABASE_URL=$SUPABASE_URL
+          SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY
+          SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY
+          SUPABASE_JWT_SECRET=$SUPABASE_JWT_SECRET
+          EOF
+
+      # THE 1,489-LINE PERSONA MATRIX (supabase/tests/02_rls_matrix_test.sql).
+      #
+      # CLAUDE.md R5 says row-level security is tested, not assumed, and this is
+      # the test. Until now `ci.yml` claimed it ran "against a real Supabase
+      # project in a separate workflow" and `.github/workflows/` held exactly one
+      # file. It did not run anywhere.
+      #
+      # `run_tests.py` applies migrations and seed (committed), then runs
+      # isolation + fixtures + assertions in ONE transaction that is rolled back
+      # on pass, on failure and on interrupt. The isolation step deletes every
+      # application row inside that transaction so the counts are unscoped —
+      # which is the only kind that can prove a negative — and other sessions
+      # never see it under MVCC.
+      - name: RLS persona matrix
+        if: steps.creds.outputs.configured == 'true'
+        run: python supabase/tests/run_tests.py
+
+      # The full suite, with NOTHING deselected.
+      #
+      # `ci.yml` runs `-m "not integration and not rls"`. That exclusion is
+      # correct there and it is why `tests/security` — every test in
+      # `test_reach_conjunct_missing.py`, `test_signup_persona_escalation.py`,
+      # `test_truncate_grant.py` and `test_walls_that_hold.py` carries
+      # `pytest.mark.rls` — has never run in automation, and why migration
+      # 2000's guard tests were never exercised by CI. Here they run.
+      #
+      # BYTEXL_DB_TESTS is the opt-in `tests/rls/test_last_admin_guard.py`
+      # requires before it will touch a live database.
+      - name: pytest (all markers)
+        if: steps.creds.outputs.configured == 'true'
+        env:
+          BYTEXL_DB_TESTS: "1"
+        run: pytest
+
+      - name: Remove .env
+        if: always()
+        run: rm -f .env
