@@ -57,6 +57,17 @@ class Settings(BaseSettings):
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_model_volume: str = ""
     openrouter_model_frontier: str = ""
+    #: The embedding model for the RAG corpora. Empty means "not configured" and
+    #: `LLMClient.embed` refuses rather than defaulting — a defaulted embedding
+    #: model produces a corpus whose vectors were computed under one model and
+    #: queried under another, which returns confident, wrong neighbours.
+    #:
+    #: This lives here rather than in `os.environ` because `Settings` reads
+    #: `.env` and the process environment does NOT: the API server was started
+    #: with the key present in `.env`, `os.environ.get()` returned "", and every
+    #: `/copilot/ask` 500'd while the ingestion CLI — which reads `.env` itself —
+    #: worked fine. `app/core/llm.py` said this field belonged here; it does.
+    openrouter_embedding_model: str = ""
     openrouter_app_url: str = ""
     openrouter_app_title: str = "byteXL Ops Intelligence Platform"
 

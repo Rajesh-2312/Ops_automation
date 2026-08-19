@@ -237,7 +237,14 @@ class LLMClient:
         logs it, because §11 wants token counts and latency for every invocation
         and a hidden internal batcher would report neither honestly.
         """
-        resolved = model or os.environ.get(EMBEDDING_MODEL_ENV, "")
+        # Settings first: it reads `.env`, which `os.environ` does not. The
+        # environment variable still wins nothing here but is kept as a fallback
+        # for callers that export it without a `.env` (CI, a container).
+        resolved = (
+            model
+            or get_settings().openrouter_embedding_model
+            or os.environ.get(EMBEDDING_MODEL_ENV, "")
+        )
         if not resolved:
             raise RuntimeError(
                 f"No embedding model configured. Set {EMBEDDING_MODEL_ENV} in the "

@@ -34,6 +34,7 @@ from __future__ import annotations
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import Final
 
 import structlog
 
@@ -152,6 +153,22 @@ def _render_facts(facts: Mapping[str, str] | None) -> str:
     )
 
 
+#: Output ceiling for one cited answer.
+#:
+#: Leaving `max_tokens` unset does NOT mean "as many as needed" — the provider
+#: reserves the MODEL's maximum, and OpenRouter's credit pre-check bills against
+#: the reservation rather than the usage. On claude-haiku-4.5 that is 64,000
+#: tokens, which returned `402 - requires more credits ... You requested up to
+#: 64000 tokens, but can only afford 6009` on an account with a real balance and
+#: a question whose honest answer is a few hundred tokens long.
+#:
+#: The value is a ceiling, not a target. A §9 answer is a short quotation from a
+#: retrieved section plus its citation markers; anything approaching this bound
+#: is a sign the model is summarising the whole corpus rather than answering, and
+#: `check_citations` will refuse it anyway.
+ANSWER_MAX_TOKENS: Final[int] = 1500
+
+
 class OpsCopilot:
     """Read-only RAG Q&A. No write path exists on this class, by construction."""
 
@@ -229,6 +246,7 @@ class OpsCopilot:
             LLMTask.SUMMARY,
             system=SYSTEM_PROMPT,
             user=user_prompt,
+            max_tokens=ANSWER_MAX_TOKENS,
         )
 
         # Rebound rather than reusing the name above: the two earlier refusals are
