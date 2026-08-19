@@ -10,6 +10,7 @@ import {
 import type { Session } from '@supabase/supabase-js'
 import { useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../lib/supabase'
+import { forgetPersonaRoot, rememberPersonaRoot } from '../lib/preload'
 import { isInternalRole, roleSeesCommercials, type Profile } from '../lib/types'
 
 interface AuthState {
@@ -63,8 +64,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setProfileError(error.message)
       return
     }
-    setProfile((data as Profile | null) ?? null)
-    setProfileError(data ? null : 'No profile row found for this account.')
+    const row = (data as Profile | null) ?? null
+    setProfile(row)
+    setProfileError(row ? null : 'No profile row found for this account.')
+
+    // Remember WHICH ROOT this browser lands on, so the next cold start can
+    // preload its chunk from the HTML instead of discovering it three fetches
+    // in (src/lib/preload.ts, and the plugin in vite.config.ts).
+    //
+    // This is a load hint and never an authorisation. It is written from the
+    // persona the DATABASE just returned, it decides only which bytes arrive
+    // early, and `Gate` re-reads `profile.role` to decide what actually
+    // renders. A persona with no root — the `trainer` sentinel — clears it, so
+    // an account that loses its persona stops pulling a console it can no
+    // longer open.
+    rememberPersonaRoot(row?.role)
   }, [])
 
   useEffect(() => {
@@ -89,6 +103,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // scoped by their assignments. Keeping any of it after a sign-out would
         // show one persona another's rows on the next sign-in.
         queryClient.clear()
+        // The preload hint goes with them. It leaks nothing — it is one of two
+        // literals naming a bundle chunk — but leaving it would have the login
+        // screen pull the previous occupant's console on a shared machine.
+        forgetPersonaRoot()
       }
     })
 

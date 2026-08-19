@@ -44,7 +44,28 @@ function groupNav(nav: NavItem[]): { name: string | null; items: NavItem[] }[] {
   return groups
 }
 
-export function AppShell({ nav, children }: { nav: NavItem[]; children: ReactNode }) {
+export function AppShell({
+  nav,
+  children,
+  onPrefetch,
+}: {
+  nav: NavItem[]
+  children: ReactNode
+  /**
+   * Optional. Called with a link's `to` when the pointer or keyboard focus
+   * reaches it, so the root can warm that route's chunk before the click.
+   *
+   * A prop rather than something this file works out for itself, because the
+   * loaders live with the routes: `OpsRoot` owns sixteen lazy screens and
+   * passes a prefetcher built from the same `import()` expressions its
+   * `lazy()` calls use, while `CollegeRoot` is a single chunk with nothing to
+   * warm and passes nothing. Omitting it is the correct no-op.
+   *
+   * It moves BYTES ONLY. Hovering a link fetches a chunk; it does not decide
+   * what renders and cannot decide what rows come back (CLAUDE.md R5).
+   */
+  onPrefetch?: (to: string) => void
+}) {
   const { profile, session, signOut } = useAuth()
   const role = profile?.role
 
@@ -110,6 +131,15 @@ export function AppShell({ nav, children }: { nav: NavItem[]; children: ReactNod
                     key={item.to}
                     to={item.to}
                     end={item.end}
+                    // Hover, keyboard focus and the start of a touch all mean
+                    // "this link is about to be used". `onFocus` is not
+                    // decoration: a keyboard user never fires `mouseenter`, and
+                    // leaving them out would mean the one navigation style with
+                    // no hover latency to hide behind is also the only one that
+                    // waits for the chunk.
+                    onMouseEnter={() => onPrefetch?.(item.to)}
+                    onFocus={() => onPrefetch?.(item.to)}
+                    onTouchStart={() => onPrefetch?.(item.to)}
                     className={({ isActive }) =>
                       `relative flex items-center gap-2.5 rounded-lg px-2.5 h-9 text-sm transition
                        justify-center md:justify-start ${

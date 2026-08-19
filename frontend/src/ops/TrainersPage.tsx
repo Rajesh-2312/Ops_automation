@@ -149,19 +149,6 @@ export function TrainersPage() {
   const trainersBound = trainersQuery.data ?? emptyBound<Trainer>(page.limit)
   const trainers = useMemo(() => trainersBound.rows, [trainersBound.rows])
 
-  const visible = useMemo(() => {
-    const needle = search.trim().toLowerCase()
-    return trainers.filter(
-      (t) =>
-        (woFilter === 'all' || t.work_order_status === woFilter) &&
-        (!missingRailsOnly || !railsByTrainer.has(t.id)) &&
-        (needle === '' ||
-          t.full_name.toLowerCase().includes(needle) ||
-          t.pan.toLowerCase().includes(needle) ||
-          (t.email ?? '').toLowerCase().includes(needle)),
-    )
-  }, [trainers, search, woFilter, missingRailsOnly, railsByTrainer])
-
   // §7 blocks a payout on a missing bank account or IFSC, so "no rails on file"
   // is not a cosmetic gap — it is every future payout for that trainer stuck
   // before PENDING_APPROVAL. Counted, and offered as a filter, so it is visible
@@ -179,6 +166,37 @@ export function TrainersPage() {
   const missingRails = railsLoaded
     ? trainers.filter((t) => !railsByTrainer.has(t.id)).length
     : 0
+
+  /**
+   * The "No bank rails" FILTER is gated on the same fact as the verdict, and it
+   * has to be gated separately from the chip that sets it.
+   *
+   * The chip only renders while `railsLoaded`, so it cannot be switched on from
+   * an incomplete read. It can, however, still be ON from a complete one when
+   * the read stops being complete underneath it — a colleague files the 201st
+   * trainer, the next refetch truncates, the chip disappears and `missingRailsOnly`
+   * stays `true`. The list would then be silently narrowed by a map with holes
+   * in it: trainers whose rails simply did not load, presented as the roster's
+   * §7 blockers. That is the same wrong-because-partial failure the verdict
+   * suppresses, arriving through the filter instead of through the badge.
+   *
+   * Derived rather than reset, so the switch comes back on by itself when the
+   * read is complete again and the reader does not have to notice it went away.
+   */
+  const railsFilterActive = missingRailsOnly && railsLoaded
+
+  const visible = useMemo(() => {
+    const needle = search.trim().toLowerCase()
+    return trainers.filter(
+      (t) =>
+        (woFilter === 'all' || t.work_order_status === woFilter) &&
+        (!railsFilterActive || !railsByTrainer.has(t.id)) &&
+        (needle === '' ||
+          t.full_name.toLowerCase().includes(needle) ||
+          t.pan.toLowerCase().includes(needle) ||
+          (t.email ?? '').toLowerCase().includes(needle)),
+    )
+  }, [trainers, search, woFilter, railsFilterActive, railsByTrainer])
 
   const woCounts = useMemo(() => {
     const counts = Object.fromEntries(DOC_STATUSES.map((s) => [s, 0])) as Record<
@@ -357,7 +375,7 @@ export function TrainersPage() {
                     label="No bank rails"
                     count={missingRails}
                     tone="alert"
-                    active={missingRailsOnly}
+                    active={railsFilterActive}
                     onClick={() => setMissingRailsOnly((v) => !v)}
                   />
                 </>
@@ -517,7 +535,7 @@ export function TrainersPage() {
                   title="No trainers match"
                   body="Clear the search or the work-order filter."
                   hint={
-                    missingRailsOnly
+                    railsFilterActive
                       ? 'The “No bank rails” filter is on, so only trainers with no account on file would show — and every one loaded has rails filed.'
                       : 'Rows are loaded, but nothing here matches your search text and work-order filter together. The search reads name, PAN and email.'
                   }

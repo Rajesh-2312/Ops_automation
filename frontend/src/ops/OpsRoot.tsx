@@ -1,7 +1,9 @@
-import { Suspense, lazy } from 'react'
+import { Suspense, lazy, useMemo } from 'react'
 import { Route, Routes } from 'react-router-dom'
 import { AppShell, Icons, NotFound, PageSkeleton, type NavItem } from '../components/AppShell'
 import { useAuth } from '../auth/AuthProvider'
+import { makeRoutePrefetcher } from '../lib/preload'
+import { HomePage } from './HomePage'
 
 /* ==========================================================================
    ROUTE-LEVEL CODE SPLITTING
@@ -33,41 +35,89 @@ import { useAuth } from '../auth/AuthProvider'
    export therefore breaks at runtime rather than at compile time — which is
    the one real cost of this pattern and the reason the list is kept flat,
    alphabetical-by-route and adjacent to the <Route> table that uses it.
+
+   THE ONE SCREEN THAT IS NOT LAZY IS THE LANDING SCREEN, AND THAT IS THE FIX
+   FOR A MEASURED PROBLEM RATHER THAN AN OVERSIGHT.
+
+   `HomePage` is a plain static import above. When every route was lazy, the
+   landing path was three SEQUENTIAL round trips — entry, then OpsRoot, then
+   HomePage — because Vite can only `modulepreload` the entry chunk's static
+   dependencies, so a lazy boundary is a fetch nothing can discover until the
+   chunk in front of it has arrived and run. Measured on this repo: waves of
+   166.32 / 1.73 / 10.21 kB gzip, the last two costing a full round trip each to
+   carry 11.9 kB between them.
+
+   Importing the landing route statically folds it into this chunk and deletes
+   the third wave outright; the `personaRootPreload` plugin in vite.config.ts
+   deletes the second by preloading this chunk from the HTML. The bytes are
+   unchanged — HomePage is on the critical path by definition, it is the screen
+   the persona asked for — and the other sixteen screens stay lazy, so nothing
+   a persona never opens is shipped to them.
+
+   If a different screen ever becomes the landing route, move the static import
+   with it. Two static route imports would put a screen somebody did not ask for
+   into the chunk that gates first paint.
    ========================================================================== */
 
-const HomePage = lazy(() => import('./HomePage').then((m) => ({ default: m.HomePage })))
-const WorkQueue = lazy(() => import('./WorkQueue').then((m) => ({ default: m.WorkQueue })))
+/**
+ * One loader per lazy route, keyed by the path it serves.
+ *
+ * This map is the single source of truth for the sixteen dynamic imports. The
+ * `lazy()` components below call into it and so does the nav prefetch, which is
+ * the point: a route cannot end up prefetchable-but-unroutable, or routable
+ * with a prefetch that warms a different chunk, because there is only ever one
+ * `import()` expression per screen. Rollup keys its chunk graph on that
+ * expression, so "the chunk the nav warms" and "the chunk `lazy()` awaits" are
+ * the same file and the same module instance by construction rather than by
+ * two lists agreeing.
+ *
+ * Flat and alphabetical-by-route, adjacent to the <Route> table that uses it.
+ */
+const load = {
+  '/queue': () => import('./WorkQueue'),
+  '/board': () => import('./ProgramConsole'),
+  '/programs/:id': () => import('./ProgramDetail'),
+  '/colleges': () => import('./CollegesPage'),
+  '/trainers': () => import('./TrainersPage'),
+  '/approvals': () => import('./ApprovalsPage'),
+  '/deployments': () => import('./DeploymentsPage'),
+  '/attendance': () => import('./AttendancePage'),
+  '/work-orders': () => import('./WorkOrdersPage'),
+  '/payouts': () => import('./PayoutsPage'),
+  '/users': () => import('./UsersPage'),
+  '/copilot': () => import('./CopilotPage'),
+  '/alerts': () => import('./AlertsPage'),
+  '/reports': () => import('./ReportsPage'),
+  '/comms': () => import('./CommsPage'),
+  '/erm': () => import('./ErmSyncPage'),
+}
+
+const WorkQueue = lazy(() => load['/queue']().then((m) => ({ default: m.WorkQueue })))
 const ProgramConsole = lazy(() =>
-  import('./ProgramConsole').then((m) => ({ default: m.ProgramConsole })),
+  load['/board']().then((m) => ({ default: m.ProgramConsole })),
 )
 const ProgramDetail = lazy(() =>
-  import('./ProgramDetail').then((m) => ({ default: m.ProgramDetail })),
+  load['/programs/:id']().then((m) => ({ default: m.ProgramDetail })),
 )
-const CollegesPage = lazy(() =>
-  import('./CollegesPage').then((m) => ({ default: m.CollegesPage })),
-)
-const TrainersPage = lazy(() =>
-  import('./TrainersPage').then((m) => ({ default: m.TrainersPage })),
-)
-const ApprovalsPage = lazy(() =>
-  import('./ApprovalsPage').then((m) => ({ default: m.ApprovalsPage })),
-)
+const CollegesPage = lazy(() => load['/colleges']().then((m) => ({ default: m.CollegesPage })))
+const TrainersPage = lazy(() => load['/trainers']().then((m) => ({ default: m.TrainersPage })))
+const ApprovalsPage = lazy(() => load['/approvals']().then((m) => ({ default: m.ApprovalsPage })))
 const DeploymentsPage = lazy(() =>
-  import('./DeploymentsPage').then((m) => ({ default: m.DeploymentsPage })),
+  load['/deployments']().then((m) => ({ default: m.DeploymentsPage })),
 )
 const AttendancePage = lazy(() =>
-  import('./AttendancePage').then((m) => ({ default: m.AttendancePage })),
+  load['/attendance']().then((m) => ({ default: m.AttendancePage })),
 )
 const WorkOrdersPage = lazy(() =>
-  import('./WorkOrdersPage').then((m) => ({ default: m.WorkOrdersPage })),
+  load['/work-orders']().then((m) => ({ default: m.WorkOrdersPage })),
 )
-const PayoutsPage = lazy(() => import('./PayoutsPage').then((m) => ({ default: m.PayoutsPage })))
-const UsersPage = lazy(() => import('./UsersPage').then((m) => ({ default: m.UsersPage })))
-const CopilotPage = lazy(() => import('./CopilotPage').then((m) => ({ default: m.CopilotPage })))
-const AlertsPage = lazy(() => import('./AlertsPage').then((m) => ({ default: m.AlertsPage })))
-const ReportsPage = lazy(() => import('./ReportsPage').then((m) => ({ default: m.ReportsPage })))
-const CommsPage = lazy(() => import('./CommsPage').then((m) => ({ default: m.CommsPage })))
-const ErmSyncPage = lazy(() => import('./ErmSyncPage').then((m) => ({ default: m.ErmSyncPage })))
+const PayoutsPage = lazy(() => load['/payouts']().then((m) => ({ default: m.PayoutsPage })))
+const UsersPage = lazy(() => load['/users']().then((m) => ({ default: m.UsersPage })))
+const CopilotPage = lazy(() => load['/copilot']().then((m) => ({ default: m.CopilotPage })))
+const AlertsPage = lazy(() => load['/alerts']().then((m) => ({ default: m.AlertsPage })))
+const ReportsPage = lazy(() => load['/reports']().then((m) => ({ default: m.ReportsPage })))
+const CommsPage = lazy(() => load['/comms']().then((m) => ({ default: m.CommsPage })))
+const ErmSyncPage = lazy(() => load['/erm']().then((m) => ({ default: m.ErmSyncPage })))
 
 /**
  * What a route shows while its chunk is in flight.
@@ -151,6 +201,22 @@ const deploymentIcon = (
 
 export function OpsRoot() {
   const { canSeeCommercials } = useAuth()
+
+  /**
+   * Warm a screen's chunk while the pointer is still on its link.
+   *
+   * The landing screen is covered by the static import above and the preload
+   * plugin; this covers every navigation AFTER the first one, which is most of
+   * them. A pointer rests on a nav link for 100–300 ms before the click lands —
+   * roughly a round trip on campus wifi — so by the time the route changes the
+   * chunk is usually in the module registry and `React.lazy` resolves without
+   * suspending, meaning no `RouteFallback` flash at all.
+   *
+   * Speculative and therefore silent about failure: see `makeRoutePrefetcher`.
+   * It is also strictly a fetch — hovering `/payouts` downloads a chunk and
+   * grants nothing, exactly as typing the URL does. The wall is in Postgres.
+   */
+  const prefetch = useMemo(() => makeRoutePrefetcher(load), [])
 
   // Home first, then the queue, then the board.
   //
@@ -254,7 +320,7 @@ export function OpsRoot() {
   // stale. Wire it when a shared, already-fetched count exists to read.
 
   return (
-    <AppShell nav={nav}>
+    <AppShell nav={nav} onPrefetch={prefetch}>
       {/* One Suspense boundary around the whole route table rather than one
           per route: they are siblings, only one is ever mounted at a time, and
           seventeen boundaries would render identically while making a

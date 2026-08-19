@@ -1058,7 +1058,13 @@ function ManagerHome() {
           title="Attendance gaps"
           hint={`Unmarked days so far in ${window.key}`}
           to="/attendance"
-          tone={crtGapDays > 0 ? 'alert' : 'neutral'}
+          // The figure below is suppressed when the reads were cut, so the TONE
+          // has to be too — it is derived from exactly the same partial count.
+          // Left as `crtGapDays > 0` it would state the withheld number in
+          // colour: alert when the partial count happened to be non-zero,
+          // reassuringly neutral when it happened to be zero, and neither of
+          // those is known.
+          tone={gapsComplete && crtGapDays > 0 ? 'alert' : 'neutral'}
         >
           {/* `gaps` is empty when no deployment overlapped this month at all —
               a different thing from "every day is marked", and saying the
@@ -1223,6 +1229,17 @@ function LdeHome({ commercialsHidden }: { commercialsHidden: boolean }) {
 
   const attendance = useMemo(() => attendanceBound.rows, [attendanceBound.rows])
 
+  // Same two reads, same two opposite failures, same rule as ManagerHome: a
+  // deployment past its bound HIDES a gap and an attendance row past its bound
+  // INVENTS one, so the month's gap figure is withheld rather than qualified.
+  //
+  // This screen used to qualify it instead — the note below said the figure was
+  // "an overstatement" and then drew it anyway. That is the wrong half of the
+  // rule: an LDE Executive reads this tile as a list of days to go and mark,
+  // and a number that is wrong in an unknown direction sends them either to
+  // re-mark days that are already marked or, worse, home.
+  const gapsComplete = !deploymentsBound.truncated && !attendanceBound.truncated
+
   /** Today's marking state, per deployment running today. The hero. */
   const todayRows = useMemo(() => {
     const marks = new Map<string, AttendanceMark>()
@@ -1272,7 +1289,7 @@ function LdeHome({ commercialsHidden }: { commercialsHidden: boolean }) {
       <BoundNote
         bound={attendanceQuery.data}
         noun="attendance rows this month"
-        derived="A marked day past the bound is counted here as unmarked, so the gap figure is an overstatement."
+        derived="The unmarked-day figure is withheld rather than shown: a marked day past the bound would be counted here as unmarked."
       />
       <BoundNote bound={tasksBound} noun="open tasks" />
       <BoundNote bound={batchesQuery.data} noun="batches" />
@@ -1387,9 +1404,15 @@ function LdeHome({ commercialsHidden }: { commercialsHidden: boolean }) {
           title="Unmarked this month"
           hint={`Elapsed days without a mark, ${window.key}`}
           to="/attendance"
-          tone={gapDays > 0 ? 'alert' : 'neutral'}
+          // Withheld figures do not get to tint the tile either. A tone is a
+          // claim — 'alert' says act, 'neutral' says do not — and reading it
+          // off `gapDays` while refusing to print `gapDays` would say the
+          // quiet part in colour.
+          tone={gapsComplete && gapDays > 0 ? 'alert' : 'neutral'}
         >
-          {gaps.length === 0 ? (
+          {!gapsComplete ? (
+            <TileEmpty whatFills="Not stated: the deployment or attendance read was cut at its row bound this month, and an unmarked-day count from a partial read is wrong in both directions. Open Attendance for the per-deployment truth." />
+          ) : gaps.length === 0 ? (
             <TileEmpty
               whatFills={
                 deployments.length === 0
