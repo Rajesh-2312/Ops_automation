@@ -69,18 +69,53 @@ The persona half is the PERSONA test, never `can_see_commercials()`, even though
 the two name the same two personas today — one means "may see money" and the
 other means "owns the trainer pipeline", and reusing the money predicate for a
 non-money purpose is how a wall gets moved by accident later.
+
+ONE RULE, TWO EVALUATIONS — AND WHY THAT IS NOT TWO RULES
+=========================================================
+`GET /erm/tasks` needs that authorisation inside a `WHERE`, ahead of `LIMIT`;
+every other handler needs it as a yes/no about one named subject. Those are two
+*evaluations*. The failure mode to design against is that they quietly become two
+*rules*, which is the drift this file's author refused to accept when the listing
+was first written — and the reason it shipped filtering in Python after `LIMIT`
+instead (SEC-08, below).
+
+So the rule is decomposed into three pieces, each defined exactly ONCE and used
+by both paths:
+
+    `_trainer_colleges()`     the deployments -> batches -> programs -> colleges
+                              walk. Executed by `_trainer_college_ids()`;
+                              correlated into an `EXISTS` by `_visible_to()`.
+    `_trainer_deployments()`  "is this trainer engaged anywhere at all". Executed
+                              by `_trainer_is_deployed()`; `NOT EXISTS` in
+                              `_visible_to()`.
+    `_trainer_reach_rule()`   the boolean that combines them, and the only place
+                              the sourcing carve-out is spelled. Called with
+                              `bool`s by the guard and with SQL expressions by the
+                              listing — the same function, because `|` means OR
+                              on both.
+
+`tests/unit/test_erm_list_tasks_limit.py` asserts that sharing directly: it spies
+on all three and fails if either path stops going through them. Re-inlining the
+walk or the boolean in either place turns a test red rather than turning the
+counts silently wrong.
+
+**The Python pass is still the wall.** `_visible_to()` is a pre-filter whose only
+job is to make `LIMIT` count rows the caller may SEE. `_authorise()` still runs
+over every row that comes back, so the worst a divergence in the SQL can do is
+return too few rows — the very defect SEC-08 fixes — and never a row the guard
+would have refused. That asymmetry is what makes the pre-filter safe to add.
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import uuid
-from typing import Annotated, Final
+from typing import Annotated, Any, Final, TypeVar
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select, text
+from sqlalchemy import ColumnElement, Select, SQLColumnExpression, and_, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import AuditWriter, get_audit_writer
@@ -129,6 +164,18 @@ MAX_PAGE: Final[int] = 200
 #: same frozenset only to avoid a second literal list of personas drifting from
 #: `app/domain/enums.py`, and the alias name records that the MEANING differs.
 TRAINER_PIPELINE_PERSONAS: Final[frozenset[object]] = COMMERCIALS_PERSONAS
+
+#: Either a concrete subject id — the per-card guards, which know which record
+#: they are asking about — or the queue row's own column, which is what turns the
+#: shared statement builders below into correlated subqueries for `_visible_to()`.
+#: One alias so those builders serve both callers without a second definition.
+_SubjectRef = UUID | SQLColumnExpression[Any]
+
+#: A truth value in whichever algebra the caller is working in: a Python `bool`
+#: for the per-card guards, a SQL boolean expression for the listing's `WHERE`.
+#: `|` is OR in both, which is the whole reason `_trainer_reach_rule()` can be one
+#: function rather than two that have to be kept in step by hand.
+_Truth = TypeVar("_Truth", bool, ColumnElement[bool])
 
 
 # --- wire models ---------------------------------------------------------------
@@ -375,7 +422,7 @@ def _not_found(detail: str) -> HTTPException:
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail)
 
 
-async def _trainer_college_ids(session: AsyncSession, trainer_id: UUID) -> set[UUID]:
+def _trainer_colleges(trainer_id: _SubjectRef) -> Select[tuple[UUID]]:
     """The colleges a trainer teaches at — the reach half of `can_reach_trainer()`.
 
     The same walk 0400's SQL helper does —
@@ -383,28 +430,68 @@ async def _trainer_college_ids(session: AsyncSession, trainer_id: UUID) -> set[U
     the same reach. Note what it inherits: a sourced-but-undeployed trainer
     reaches nobody, which is why migration 2200 pairs this with the "engaged
     nowhere" carve-out rather than using it alone (`_can_reach_trainer()`).
+
+    A statement rather than a result, because it has two callers and they must
+    not be two walks: `_trainer_college_ids()` executes it against one id, and
+    `_visible_to()` passes `ErmSyncTask.trainer_id` so SQLAlchemy correlates it
+    into an `EXISTS` against the queue row. Same joins, same `WHERE`, one place.
     """
-    statement = (
+    return (
         select(College.id)
         .join(Program, Program.college_id == College.id)
         .join(Batch, Batch.program_id == Program.id)
         .join(Deployment, Deployment.batch_id == Batch.id)
         .where(Deployment.trainer_id == trainer_id)
     )
-    return set((await session.execute(statement)).scalars().all())
 
 
-async def _trainer_is_deployed(session: AsyncSession, trainer_id: UUID) -> bool:
-    """True when this trainer has ANY deployment row at all.
+def _trainer_deployments(trainer_id: _SubjectRef) -> Select[tuple[UUID]]:
+    """Every deployment row this trainer has — the carve-out's half of the rule.
 
     Asked of `deployments` directly rather than inferred from
-    `_trainer_college_ids()` being empty, and the difference is load-bearing: a
-    deployment whose batch or program row has gone missing drops out of that
+    `_trainer_colleges()` returning nothing, and the difference is load-bearing:
+    a deployment whose batch or program row has gone missing drops out of that
     walk, and reading "no colleges" as "not deployed" would turn a broken join
     into an open door. 2200's SQL asks the same question the same way —
     `not exists (select 1 from public.deployments d where d.trainer_id = ...)`.
     """
-    statement = select(Deployment.id).where(Deployment.trainer_id == trainer_id).limit(1)
+    return select(Deployment.id).where(Deployment.trainer_id == trainer_id)
+
+
+def _trainer_reach_rule(reachable: _Truth, undeployed: _Truth, *, carve_out: bool) -> _Truth:
+    """`can_reach_trainer()`'s boolean, and the ONLY place it is spelled.
+
+    2200, restated: reachable, OR — for a caller who gets the sourcing carve-out —
+    engaged nowhere at all. `carve_out` is a plain Python `bool` because it is a
+    property of the CALLER, fixed for a whole request, so it can branch at build
+    time in both algebras:
+
+    * the pipeline personas get both disjuncts. Onboarding precedes deployment,
+      so a freshly sourced educator must stay visible to the people onboarding
+      them;
+    * an LDE Executive gets only the first. An educator engaged nowhere is on no
+      campus, so "is this trainer on my campus synced" is not a question that has
+      an answer for them, and refusing is fail-closed (`_authorise_trainer()`).
+
+    `|` is OR for a `bool` and OR for a SQL expression, which is what lets the
+    guard and the listing share this function instead of keeping two boolean
+    shapes in step by hand. `~` is not used: it is bitwise NOT on a `bool` and
+    would silently yield `-2`, so the negation is done by the caller and handed
+    in as `undeployed`.
+    """
+    if carve_out:
+        return reachable | undeployed
+    return reachable
+
+
+async def _trainer_college_ids(session: AsyncSession, trainer_id: UUID) -> set[UUID]:
+    """`_trainer_colleges()`, run for one trainer."""
+    return set((await session.execute(_trainer_colleges(trainer_id))).scalars().all())
+
+
+async def _trainer_is_deployed(session: AsyncSession, trainer_id: UUID) -> bool:
+    """True when this trainer has ANY deployment row at all."""
+    statement = _trainer_deployments(trainer_id).limit(1)
     return bool((await session.execute(statement)).scalars().all())
 
 
@@ -454,8 +541,10 @@ def _owns_trainer_pipeline(principal: Principal) -> bool:
     return principal.persona in TRAINER_PIPELINE_PERSONAS
 
 
-async def _can_reach_trainer(session: AsyncSession, principal: Principal, trainer_id: UUID) -> bool:
-    """App-side `public.can_reach_trainer(uuid)` as migration 2200 defines it.
+async def _can_reach_trainer(
+    session: AsyncSession, principal: Principal, trainer_id: UUID, *, carve_out: bool = True
+) -> bool:
+    """App-side `public.can_reach_trainer(uuid)` as migrations 2200/2500 define it.
 
     "Reachable, or not yet deployed anywhere" — both disjuncts, in 2200's order
     of intent:
@@ -469,10 +558,21 @@ async def _can_reach_trainer(session: AsyncSession, principal: Principal, traine
 
     The moment a trainer is deployed they belong to whoever covers that college,
     which is the half that was missing and is the whole of SEC-05.
+
+    `carve_out` defaults to True because that is what the SQL helper this mirrors
+    always does. `_authorise_trainer()` passes False for the LDE Executive's read,
+    which is deliberately stricter — see that function.
+
+    Both facts are fetched here and combined by `_trainer_reach_rule()` rather
+    than by an `or` written in place, so the listing's `WHERE` and this guard
+    cannot come to disagree about what the rule IS. The two `and`s below are the
+    short-circuit the `or` used to provide: the deployments query is skipped when
+    the walk already said yes, and skipped entirely when there is no carve-out to
+    apply.
     """
-    if await _trainer_college_ids(session, trainer_id) & principal.college_ids:
-        return True
-    return not await _trainer_is_deployed(session, trainer_id)
+    reachable = bool(await _trainer_college_ids(session, trainer_id) & principal.college_ids)
+    undeployed = carve_out and not reachable and not await _trainer_is_deployed(session, trainer_id)
+    return _trainer_reach_rule(reachable, undeployed, carve_out=carve_out)
 
 
 async def _authorise_trainer(
@@ -517,7 +617,7 @@ async def _authorise_trainer(
                     "their campus."
                 ),
             )
-        if not (await _trainer_college_ids(session, trainer_id) & principal.college_ids):
+        if not await _can_reach_trainer(session, principal, trainer_id, carve_out=False):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have access to this trainer",
@@ -563,6 +663,61 @@ async def _authorise(
         await _authorise_trainer(session, principal, subject_id, write=write)
     else:
         await _authorise_program(session, principal, subject_id, write=write)
+
+
+def _visible_to(principal: Principal) -> ColumnElement[bool]:
+    """`_authorise(..., write=False)` as a `WHERE`, for `list_tasks()` only.
+
+    The same rule the guards above apply one subject at a time, expressed over the
+    queue row so Postgres can apply it BEFORE `LIMIT`. It is built from the same
+    three pieces — `_trainer_colleges()`, `_trainer_deployments()`,
+    `_trainer_reach_rule()` — for the reason the module docstring gives: two
+    evaluations of one rule, never two rules.
+
+    Read it against 1900's three policies, which is the shape it takes:
+
+        trainer card : app_role() in (pipeline) ? reachable or undeployed
+                                                : reachable
+        program card : the program exists and its college is in reach
+
+    The caller's persona is checked by `require_internal()` before this is built,
+    so `carve_out` is the only persona-dependent term left and the two internal
+    personas that reach here are exactly "pipeline" and "LDE Executive".
+
+    THE NULL GUARDS ARE MIGRATION 2500, NOT DECORATION
+    --------------------------------------------------
+    `not exists (... where d.trainer_id = null)` is TRUE — the carve-out branch
+    answers "engaged nowhere, therefore visible" for a row that names no trainer
+    at all. 1900's `erm_sync_tasks_subject_ck` means a `subject_kind = 'trainer'`
+    row always has one, so the `subject_kind` conjunct already holds the line;
+    2500's whole argument is that relying on a column constraint to keep a reach
+    predicate honest is how the next caller gets hurt. Both `IS NOT NULL`s are
+    therefore written out. The program branch is naturally fail-closed — an
+    `EXISTS` on `programs.id = null` matches nothing — and says so anyway.
+
+    `_authorise_program()` answers 404 for a program row that has gone missing and
+    403 for one out of reach; both are invisible in a listing, so the single
+    `EXISTS` here covers the pair. That is the one conjunct of the rule this
+    function restates rather than shares, because the per-card guard needs the
+    two apart and a listing cannot use the difference.
+    """
+    colleges = sorted(principal.college_ids)
+    reachable = _trainer_colleges(ErmSyncTask.trainer_id).where(College.id.in_(colleges)).exists()
+    undeployed = ~_trainer_deployments(ErmSyncTask.trainer_id).exists()
+
+    trainer_card = and_(
+        ErmSyncTask.subject_kind == ErmSubjectKind.TRAINER,
+        ErmSyncTask.trainer_id.is_not(None),
+        _trainer_reach_rule(reachable, undeployed, carve_out=_owns_trainer_pipeline(principal)),
+    )
+    program_card = and_(
+        ErmSyncTask.subject_kind == ErmSubjectKind.PROGRAM,
+        ErmSyncTask.program_id.is_not(None),
+        select(Program.id)
+        .where(Program.id == ErmSyncTask.program_id, Program.college_id.in_(colleges))
+        .exists(),
+    )
+    return or_(trainer_card, program_card)
 
 
 def _subject_id(row: ErmSyncTask) -> UUID:
@@ -858,10 +1013,37 @@ async def list_tasks(
 
     Oldest first, because a card that has been queued for three weeks is the one
     that matters. A pure read, so no audit row.
+
+    SEC-08 — THE REACH GOES IN THE STATEMENT, NOT AFTER IT
+    ------------------------------------------------------
+    The filter used to run in Python over rows the database had ALREADY limited,
+    which quietly made `limit` mean "rows considered" rather than "rows returned":
+    a caller asking for fifty cards received fewer than fifty while more were
+    waiting behind the ones dropped. Under-disclosure rather than a leak — no
+    unreachable card was ever returned — but a queue that hides work is a queue
+    people stop trusting, and this one exists to tell somebody what to retype
+    next. It was already true for an LDE Executive; SEC-05 gave a Manager and a
+    Senior Manager reach they can fall outside of too, so it stopped being one
+    persona's problem.
+
+    So `_visible_to()` goes into the `WHERE`, ahead of `ORDER BY ... LIMIT`, which
+    is where 1900's three policies would have applied it if RLS ran on this
+    connection at all. It is built from the same walk, the same existence check
+    and the same boolean the per-card guards use, so it is one rule evaluated
+    twice rather than a second copy — see the module docstring, and
+    `tests/unit/test_erm_list_tasks_limit.py`, which fails if either path stops
+    going through them.
+
+    The Python pass is kept BELOW as a backstop rather than replaced. On a
+    BYPASSRLS connection it is the assertion that no unreachable card reaches the
+    response whatever the statement does, and it costs one memoised verdict per
+    distinct subject on the page. It also keeps the failure asymmetric: a
+    `_visible_to()` that is ever too WIDE returns rows the guard then drops (too
+    few cards, the defect above), never rows the guard would have refused.
     """
     require_internal(principal)
 
-    statement = select(ErmSyncTask)
+    statement = select(ErmSyncTask).where(_visible_to(principal))
     if state is not None:
         statement = statement.where(ErmSyncTask.state == state)
     if subject_kind is not None:
