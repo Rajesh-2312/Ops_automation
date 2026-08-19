@@ -23,11 +23,23 @@ import { Button, ErrorNote, Field, InfoNote, Input, Spinner } from '../component
  * `is_admin` was never taken from metadata, and that defence was right; it is
  * why this stopped short of handing out admin.
  *
- * More importantly: a new internal account has NO assignments, and internal
- * reach comes from `user_college_assignments` / `user_cluster_assignments`, not
- * from the persona. So a fresh Manager signup sees an empty console until an
- * admin assigns them colleges on Users & roles. That is least privilege
- * working, not a bug to route around.
+ * WHAT THIS SCREEN NOW HAS TO SAY INSTEAD.
+ *
+ * The picker was not the only thing that went. The brand panel used to list the
+ * five personas as five doors, and the form's signup subtitle read "Pick the
+ * persona for this account" — both written for a form that asked. With the
+ * field gone, a panel that enumerates doors and a heading that says pick one
+ * describe a screen that no longer exists, and the first thing a new joiner
+ * would do is look for the dropdown.
+ *
+ * So the panel says what the SYSTEM is, and the one line about access says the
+ * true thing about how it is granted: everyone comes through the same door, an
+ * admin sets the persona, and reach comes from the assignment tables rather
+ * than from the persona at all (CLAUDE.md §4). That last part matters more than
+ * it looks — a Manager with the right persona and no assignments reaches
+ * nothing, so "an admin assigned my role" is not the end of the story, and a
+ * console that is empty for that reason is least privilege working rather than
+ * a bug to route around.
  */
 export function LoginPage() {
   const [mode, setMode] = useState<'signin' | 'signup'>('signin')
@@ -135,10 +147,15 @@ export function LoginPage() {
           <h2 className="text-xl font-semibold tracking-tight text-ink">
             {mode === 'signin' ? 'Sign in' : 'Create an account'}
           </h2>
+          {/* The signup line used to read "Pick the persona for this account."
+              It was accurate about a form that had a persona dropdown and is a
+              straight instruction to look for a control that no longer exists —
+              which is how a removed field turns into a support question. Both
+              lines now describe what this form actually does. */}
           <p className="text-sm text-ink-2 mt-1 mb-6">
             {mode === 'signin'
               ? 'Your persona decides which console you land on.'
-              : 'Pick the persona for this account.'}
+              : 'One account, one email and password. An admin does the rest.'}
           </p>
 
           <div className="glass-strong rounded-card border border-line shadow-raised p-5">
