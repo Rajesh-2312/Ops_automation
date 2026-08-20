@@ -1,4 +1,4 @@
-import { ApiError, apiPost } from './api'
+import { ApiError, apiPost, describeErrorBody } from './api'
 import { bounded, type Bounded } from './bounds'
 import { supabase } from './supabase'
 import type { DocumentCategory, ProgramType, RateBasis } from './types'
@@ -240,14 +240,10 @@ export async function fetchVersionHistory(
 
   if (!response.ok) {
     const body = await response.text().catch(() => '')
-    let detail = body
-    try {
-      const parsed = JSON.parse(body) as { detail?: unknown }
-      if (typeof parsed.detail === 'string') detail = parsed.detail
-    } catch {
-      /* not JSON; use it verbatim */
-    }
-    throw new ApiError(detail || `${response.status} ${response.statusText}`, response.status)
+    throw new ApiError(
+      describeErrorBody(body, response.status, response.statusText),
+      response.status,
+    )
   }
 
   return (await response.json()) as VersionHistory

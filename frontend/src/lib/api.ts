@@ -92,14 +92,10 @@ export async function apiPost(path: string, body?: unknown): Promise<Response> {
 
   if (!response.ok) {
     const body = await response.text().catch(() => '')
-    let detail = body
-    try {
-      const parsed = JSON.parse(body) as { detail?: unknown; message?: string }
-      detail = describeDetail(parsed.detail) ?? parsed.message ?? body
-    } catch {
-      /* body was not JSON; use it verbatim */
-    }
-    throw new ApiError(detail || `${response.status} ${response.statusText}`, response.status)
+    throw new ApiError(
+      describeErrorBody(body, response.status, response.statusText),
+      response.status,
+    )
   }
 
   return response
@@ -134,17 +130,56 @@ export async function apiGet<T>(path: string): Promise<T> {
 
   if (!response.ok) {
     const body = await response.text().catch(() => '')
-    let detail = body
-    try {
-      const parsed = JSON.parse(body) as { detail?: unknown; message?: string }
-      detail = describeDetail(parsed.detail) ?? parsed.message ?? body
-    } catch {
-      /* body was not JSON; use it verbatim */
-    }
-    throw new ApiError(detail || `${response.status} ${response.statusText}`, response.status)
+    throw new ApiError(
+      describeErrorBody(body, response.status, response.statusText),
+      response.status,
+    )
   }
 
   return (await response.json()) as T
+}
+
+/** Longest raw body pasted into an error message before it is cut short. */
+const MAX_ERROR_BODY = 400
+
+/**
+ * Turn a non-2xx response body into one line a reader can act on.
+ *
+ * WHY THIS IS NOT THE BODY VERBATIM
+ * =================================
+ * All four call sites used to fall back to the raw body when it would not
+ * parse as JSON. FastAPI always answers JSON, so "not JSON" does not mean the
+ * API said something unusual — it means the API never saw the request. On a
+ * static host an unmatched path is answered by the host's own 404 page, and
+ * the fallback pasted that page's entire markup into the error box: two
+ * hundred lines of inline CSS wrapped around the one fact that mattered, which
+ * was that there is no API at this origin. That is what the Ops Copilot showed
+ * on GitHub Pages, and it looked like a Copilot fault rather than a missing
+ * backend.
+ *
+ * A JSON body is unwrapped exactly as before. An HTML body is reported as what
+ * it is. Anything else is truncated rather than pasted whole.
+ */
+export function describeErrorBody(body: string, status: number, statusText: string): string {
+  try {
+    const parsed = JSON.parse(body) as { detail?: unknown; message?: string }
+    const detail = describeDetail(parsed.detail) ?? parsed.message
+    if (detail) return detail
+  } catch {
+    /* not JSON — the shapes below handle that case deliberately */
+  }
+
+  if (/^\s*<(?:!doctype|html|\?xml)/i.test(body)) {
+    return (
+      `No API is deployed at ${API_BASE_URL || 'this origin'} — it answered ${status} ` +
+      'with an HTML page instead of JSON, which is a static host replying rather than ' +
+      'FastAPI. Point VITE_API_BASE_URL at a running backend and rebuild.'
+    )
+  }
+
+  const trimmed = body.trim()
+  if (!trimmed) return `${status} ${statusText}`
+  return trimmed.length > MAX_ERROR_BODY ? `${trimmed.slice(0, MAX_ERROR_BODY)}…` : trimmed
 }
 
 /**

@@ -1,4 +1,4 @@
-import { ApiError, apiGet, apiPost } from './api'
+import { ApiError, apiGet, apiPost, describeErrorBody } from './api'
 import { supabase } from './supabase'
 
 /* =============================================================================
@@ -447,24 +447,13 @@ async function apiPatch(path: string, body: unknown): Promise<Response> {
 
   if (!response.ok) {
     const text = await response.text().catch(() => '')
-    let detail = text
-    try {
-      const parsed = JSON.parse(text) as { detail?: unknown; message?: string }
-      if (typeof parsed.detail === 'string') detail = parsed.detail
-      else if (Array.isArray(parsed.detail)) {
-        detail = parsed.detail
-          .map((item) => {
-            const e = item as { loc?: unknown[]; msg?: string }
-            const field = Array.isArray(e.loc) ? e.loc.filter((p) => p !== 'body').join('.') : ''
-            return field ? `${field}: ${e.msg ?? ''}` : (e.msg ?? '')
-          })
-          .filter(Boolean)
-          .join(' · ')
-      } else if (parsed.message) detail = parsed.message
-    } catch {
-      /* body was not JSON; use it verbatim */
-    }
-    throw new ApiError(detail || `${response.status} ${response.statusText}`, response.status)
+    // Was a second, drifting copy of `describeDetail` plus the same raw-body
+    // fallback. One implementation, so a 422 reads identically wherever it
+    // came from and an HTML body is diagnosed rather than pasted.
+    throw new ApiError(
+      describeErrorBody(text, response.status, response.statusText),
+      response.status,
+    )
   }
 
   return response
