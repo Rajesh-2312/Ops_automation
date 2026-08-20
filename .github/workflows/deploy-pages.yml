@@ -1,0 +1,85 @@
+name: Deploy Pages
+
+# Publishes the FRONTEND ONLY. GitHub Pages serves static files, so the seven
+# screens that call FastAPI — Payouts, Approvals, Comms, ERM sync, and the two
+# program-generation paths — stay inert here until VITE_API_BASE_URL points at a
+# backend hosted somewhere that can run a process.
+#
+# The three VITE_* values below are build-time substitutions baked into the
+# shipped JavaScript, and they are readable by anyone who opens devtools. That
+# is correct for the Supabase ANON key, which is public by design and walled by
+# row-level security in Postgres (CLAUDE.md R5). Never add the service-role key,
+# the JWT secret, or an OpenRouter key to this list — a `VITE_` prefix on any of
+# them publishes it.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race to the same site; cancel the older one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # From the lock, not the ranges — same discipline as ci.yml's pip install.
+      - run: npm ci
+
+      # `npm run build` is `tsc -b && vite build`, so a type error fails the
+      # deploy rather than shipping a broken bundle.
+      - run: npm run build
+        env:
+          VITE_BASE: /Ops_automation/
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+
+      # THE SPA FALLBACK. Pages has no rewrite rules, so a hard load of
+      # /Ops_automation/payouts asks for a file that was never built and gets
+      # the 404 page. Serving the app itself as that 404 lets it boot and hand
+      # the path to the router — the same job vercel.json's rewrite does, done
+      # with the only mechanism Pages offers.
+      - run: cp dist/index.html dist/404.html
+
+      # Pages will not serve a directory containing an underscore-prefixed path
+      # unless this file exists. Vite does not emit one, and nothing in the
+      # build depends on Jekyll.
+      - run: touch dist/.nojekyll
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/dist
+
+  deploy:
+    name: deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

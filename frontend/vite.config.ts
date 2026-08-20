@@ -184,6 +184,17 @@ function personaRootPreload(): Plugin {
 }
 
 export default defineConfig({
+  /* WHERE THE APP IS MOUNTED, as an env var rather than a constant.
+     Vercel serves from the domain root and needs '/'. GitHub Pages serves a
+     project site from '/<repo>/', and a bundle built for the root asks for
+     /assets/… there — every request 404s and the page renders white. Hardcoding
+     either one breaks the other host, so the build takes it from VITE_BASE and
+     defaults to root. Vite exposes the resolved value as import.meta.env.BASE_URL,
+     which is what the router's basename reads in App.tsx — set in one place,
+     consumed in both. */
+  base:
+    (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env
+      ?.VITE_BASE ?? '/',
   plugins: [react(), tailwindcss(), personaRootPreload()],
   server: { port: 5173, open: true },
   build: {

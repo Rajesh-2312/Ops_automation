@@ -27,7 +27,13 @@ const CollegeRoot = lazy(() =>
 export default function App() {
   return (
     <AuthProvider>
-      <BrowserRouter>
+      {/* Paired with `base` in vite.config.ts. BASE_URL is '/' on Vercel and
+          '/Ops_automation/' on a GitHub Pages project site; without the
+          basename every route would be matched one path segment too deep there
+          and the app would render its not-found screen at its own home page.
+          The trailing slash is stripped because React Router wants '/repo',
+          not '/repo/'. */}
+      <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/$/, '')}>
         {/* The same full-screen treatment `Gate` uses while the session and
             profile resolve, so signing in and loading the console read as one
             continuous wait rather than two different ones. */}
