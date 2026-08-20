@@ -71,6 +71,48 @@ class Settings(BaseSettings):
     openrouter_app_url: str = ""
     openrouter_app_title: str = "byteXL Ops Intelligence Platform"
 
+    # --- Browser origins allowed to call this API ----------------------------
+    #: Comma-separated EXACT origins, scheme and host and port:
+    #:   CORS_ALLOWED_ORIGINS=http://localhost:5173,https://rajesh-2312.github.io
+    #:
+    #: Empty installs no CORS middleware at all. That is right for a same-origin
+    #: deployment behind a reverse proxy and wrong for every deployment we
+    #: actually have — the console is served by Vite on :5173 in dev and by a
+    #: static host in prod, so every call to this API is cross-origin and the
+    #: browser refuses it before the request is made. The symptom is not a 403:
+    #: `fetch` rejects, the frontend reports "Could not reach the API", and the
+    #: service log shows nothing, because nothing arrived.
+    cors_allowed_origins: str = ""
+
+    @property
+    def cors_origins(self) -> list[str]:
+        """The allow-list, split and normalised. Trailing slashes are dropped
+        because an `Origin` header never has one and an exact match is what
+        Starlette performs."""
+        return [
+            origin.strip().rstrip("/")
+            for origin in self.cors_allowed_origins.split(",")
+            if origin.strip()
+        ]
+
+    @field_validator("cors_allowed_origins")
+    @classmethod
+    def _no_wildcard_origin(cls, v: str) -> str:
+        """`*` is refused rather than honoured.
+
+        This API is reached with a bearer token in an `Authorization` header, and
+        a wildcard tells every page on the internet that it may send one here.
+        The tokens live in the console's own storage so a wildcard does not hand
+        them out by itself — it removes the layer that makes stealing one
+        insufficient. An allow-list of two origins costs nothing to maintain.
+        """
+        if "*" in v:
+            raise ValueError(
+                "CORS_ALLOWED_ORIGINS may not contain '*'. List each origin exactly, "
+                "e.g. http://localhost:5173,https://rajesh-2312.github.io"
+            )
+        return v
+
     @field_validator("database_url")
     @classmethod
     def _reject_transaction_pooler(cls, v: PostgresDsn) -> PostgresDsn:

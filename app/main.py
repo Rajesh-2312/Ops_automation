@@ -28,9 +28,11 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Final
 
 import structlog
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
     approvals,
@@ -157,6 +159,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         openapi_url=None if resolved.is_prod else "/openapi.json",
     )
 
+    _configure_cors(app, resolved)
+
     app.include_router(approvals.router)
     app.include_router(comms.router)
     app.include_router(copilot.router)
@@ -168,6 +172,79 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(reports.router)
 
     return app
+
+
+#: Response headers the browser may READ on a cross-origin reply.
+#:
+#: THIS LIST IS AN R4 CONTROL, NOT A CONVENIENCE
+#: =============================================
+#: A cross-origin `fetch` can see six response headers and no others. Everything
+#: below is invisible to JavaScript unless it is named here — and the sheet
+#: endpoints put the artifact's state in a header precisely so the console
+#: cannot render a blocked draft as though it were approved.
+#:
+#: `frontend/src/lib/payouts.ts` reads the absent header as `blocked: true` and
+#: `state: DRAFT`, so omitting one of these fails safe rather than dangerously.
+#: It also makes every sheet download read as a blocked draft, which is a
+#: feature that does not work rather than a wall that does not hold. Both are
+#: defects; only one is a security defect.
+#:
+#: Taken from the modules that set them, so renaming a constant there does not
+#: silently stop exposing it. `dict.fromkeys` dedupes — payouts and reports both
+#: define `X-Artifact-State`, deliberately, and it must appear once.
+EXPOSED_RESPONSE_HEADERS: Final[tuple[str, ...]] = tuple(
+    dict.fromkeys(
+        (
+            # The filename of a generated sheet or report. Not custom, but not
+            # one of the six the browser exposes by default either.
+            "Content-Disposition",
+            payouts.ARTIFACT_STATE_HEADER,
+            payouts.BLOCKED_HEADER,
+            payouts.BLOCKING_CODES_HEADER,
+            reports.ARTIFACT_STATE_HEADER,
+        )
+    )
+)
+
+
+def _configure_cors(app: FastAPI, settings: Settings) -> None:
+    """Install CORS, or deliberately do not.
+
+    WHY THIS WAS MISSING AND WHAT IT COST
+    =====================================
+    There was no CORS middleware anywhere in this application, and the console
+    has never been same-origin with it: Vite serves :5173 while the API serves
+    :8000, and in production a static host serves the console while the API runs
+    somewhere that can run a process. Every browser call to FastAPI was refused
+    by the browser before it left, which surfaced as the frontend's own
+    "Could not reach the API" message — a message about the API being down,
+    shown for an API that was up. Nothing reached the service log, because
+    nothing reached the service.
+
+    An empty allow-list installs nothing. That keeps the same-origin
+    reverse-proxy deployment free of a middleware it does not need, and it means
+    turning CORS on is an explicit act with an explicit list of who.
+
+    `allow_credentials` is False on purpose. Authentication here is a bearer
+    token in a header, never a cookie, so credentialed mode buys nothing and
+    would forbid a wildcard we already refuse in `Settings`.
+    """
+    if not settings.cors_origins:
+        return
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_credentials=False,
+        # The verbs the routers actually register, plus the preflight's own.
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        # `Authorization` is the whole point; without it every authenticated
+        # call fails its preflight. `Content-Type` is needed for a JSON body.
+        allow_headers=["Authorization", "Content-Type"],
+        expose_headers=list(EXPOSED_RESPONSE_HEADERS),
+        # Cache the preflight so a burst of calls does not double its requests.
+        max_age=600,
+    )
 
 
 #: The ASGI application, built on first access to `app.main:app`. Not a module
