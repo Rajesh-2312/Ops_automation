@@ -1,0 +1,80 @@
+# Render blueprint for the API service.
+#
+# The console is NOT here. It is a static build deployed by
+# `.github/workflows/deploy-pages.yml`, and the two halves are joined by exactly
+# two settings that must agree:
+#
+#   this service   CORS_ALLOWED_ORIGINS = https://rajesh-2312.github.io
+#   Pages build    VITE_API_BASE_URL    = https://<this service>.onrender.com
+#
+# Get one wrong and the console reports "Could not reach the API" while this
+# service sits idle and logs nothing, because the browser refuses the request
+# before it is sent. See docs/deployment.md.
+
+services:
+  - type: web
+    name: bytexl-ops-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    region: singapore # Nearest to the Supabase project and to the users.
+    plan: free
+    healthCheckPath: /health
+
+    envVars:
+      # --- Not secret ---------------------------------------------------------
+      - key: APP_ENV
+        value: prod # Turns OFF /docs and /openapi.json. The schema is a map of
+        # every commercial endpoint and is for internal staff,
+        # not the public internet (app/main.py).
+
+      - key: LOG_LEVEL
+        value: INFO
+
+      # The console's origin, exactly — scheme and host, no trailing slash and
+      # no path. `https://rajesh-2312.github.io/Ops_automation/` is a URL, not
+      # an origin, and will match nothing.
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://rajesh-2312.github.io
+
+      # --- Set in the dashboard, never in this file ---------------------------
+      # `sync: false` means Render prompts for the value and keeps it out of the
+      # repository. Every one of these is a credential.
+      #
+      # DATABASE_URL must use the SESSION pooler on port 5432. Port 6543 is the
+      # transaction pooler, which does not preserve SET ROLE across statements —
+      # `Settings` refuses it at startup rather than letting the RLS persona
+      # tests pass while proving nothing (app/core/config.py).
+      - key: DATABASE_URL
+        sync: false
+
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+
+      # Carries BYPASSRLS. Every code path using it re-checks role and reach in
+      # Python, because the policies and column-guard triggers step aside for it.
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+
+      # Required to verify any caller. Without it `app.core.security` fails
+      # CLOSED and every authenticated endpoint returns 500 — deliberate, since
+      # a verifier that cannot verify must never fall back to trusting a token.
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+
+      # --- The Copilot --------------------------------------------------------
+      # Optional. Leaving these unset yields a working tracker with a Copilot
+      # that refuses — CLAUDE.md §13's Phase 1, which has no AI in it by design.
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL_VOLUME
+        sync: false
+      - key: OPENROUTER_MODEL_FRONTIER
+        sync: false
+
+      # Must be a 1536-dimension model: `rag_embeddings.embedding` is
+      # vector(1536) and a corpus embedded under one model cannot be queried
+      # under another without returning confident, wrong neighbours.
+      - key: OPENROUTER_EMBEDDING_MODEL
+        sync: false

@@ -1,0 +1,56 @@
+# What the API image must NOT carry.
+#
+# The starting point is that the build context is the whole repo and the image
+# needs four things: requirements.txt, app/, run_api.py, and nothing else. The
+# entries below are therefore about what would be harmful or wasteful if it
+# slipped in, not an exhaustive mirror of .gitignore.
+
+# --- Secrets ------------------------------------------------------------------
+# .env holds the service-role key, which carries BYPASSRLS. It reaches the
+# container as an environment variable set by the host, never as a baked layer:
+# an image layer is readable by anyone who can pull the image, and deleting the
+# file in a later layer does not remove it from the earlier one.
+.env
+.env.*
+!.env.example
+
+# --- Operator tooling that can act outside the system -------------------------
+# tools/agentmail.py can send mail. CLAUDE.md R3 keeps send-capable code out of
+# anything an agent can reach; leaving it out of the image keeps it out of
+# anything the running service can reach. tools/load_data.py and the ingestion
+# CLI likewise write to the database from a terminal, not from a request.
+tools/
+
+# --- Not the service ----------------------------------------------------------
+frontend/
+supabase/
+tests/
+docs/
+reference/
+.github/
+.claude/
+
+# --- Build and cache noise ----------------------------------------------------
+.git/
+.gitignore
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+*.egg-info/
+dist/
+build/
+node_modules/
+graphify-out/
+audits/
+
+# --- Editor / OS --------------------------------------------------------------
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
