@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { describeErrorBody } from './api'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describeErrorBody, unreachableMessage } from './api'
 
 /* =============================================================================
    What a failed request is allowed to say to the person who made it.
@@ -137,5 +137,74 @@ describe('everything else', () => {
     expect(describeErrorBody('upstream connect error', 502, 'Bad Gateway')).toBe(
       'upstream connect error',
     )
+  })
+})
+
+/* =============================================================================
+   The other half: `fetch` rejecting, which is not a status code at all.
+   =============================================================================
+
+   The console showed "Could not reach the API at this origin. Check
+   VITE_API_BASE_URL and that the FastAPI service is running" — one message for
+   two unrelated situations, leading with the wrong one.
+
+   A rejected `fetch` tells JavaScript nothing about why, deliberately: a page
+   must not be able to probe what is on another origin. So the message can only
+   name the small set of things it can actually be, and which set that is
+   depends entirely on whether this build knows an API address.
+   ============================================================================= */
+
+afterEach(() => {
+  vi.unstubAllEnvs()
+  vi.resetModules()
+})
+
+/** Re-import with a stubbed env, since `API_BASE_URL` is read at module load. */
+async function withBaseUrl(url: string): Promise<() => string> {
+  vi.stubEnv('VITE_API_BASE_URL', url)
+  vi.resetModules()
+  const fresh = (await import('./api')) as typeof import('./api')
+  return fresh.unreachableMessage
+}
+
+describe('a build with no API address', () => {
+  it('says the request went to the static host, not that a service is down', () => {
+    const message = unreachableMessage()
+
+    expect(message).toContain('static host')
+    // The old message's first instruction. There is no service to restart here.
+    expect(message).not.toContain('is running')
+  })
+
+  it('says a redeploy is needed, because Vite bakes the value in at build time', () => {
+    // Someone told to "set VITE_API_BASE_URL" will set it and reload, and the
+    // bundle in their browser will not have changed.
+    const message = unreachableMessage()
+
+    expect(message).toContain('VITE_API_BASE_URL')
+    expect(message).toContain('redeploy')
+  })
+})
+
+describe('a build that knows where the API is', () => {
+  it('names CORS as readily as an outage', async () => {
+    // The console and the API are on different origins by construction, so a
+    // missing allow-list entry is at least as likely as a stopped process.
+    const message = (await withBaseUrl('https://api.example.com'))()
+
+    expect(message).toContain('https://api.example.com')
+    expect(message).toContain('CORS_ALLOWED_ORIGINS')
+  })
+
+  it('warns that the API log will be empty either way', async () => {
+    // The detail that costs the most time: a refused request never arrives, so
+    // "nothing in the log" is not evidence that the service is the problem.
+    const message = (await withBaseUrl('https://api.example.com'))()
+    expect(message).toContain('log is empty')
+  })
+
+  it('does not tell someone to set a variable that is already set', async () => {
+    const message = (await withBaseUrl('https://api.example.com'))()
+    expect(message).not.toContain('VITE_API_BASE_URL')
   })
 })

@@ -1,4 +1,4 @@
-import { ApiError, apiPost, describeErrorBody } from './api'
+import { ApiError, apiPost, describeErrorBody, unreachableMessage } from './api'
 import { bounded, type Bounded } from './bounds'
 import { supabase } from './supabase'
 import type { DocumentCategory, ProgramType, RateBasis } from './types'
@@ -231,11 +231,7 @@ export async function fetchVersionHistory(
       headers: { Authorization: `Bearer ${token}` },
     })
   } catch {
-    throw new ApiError(
-      `Could not reach the API at ${API_BASE_URL || 'this origin'}. ` +
-        'Check VITE_API_BASE_URL and that the FastAPI service is running.',
-      0,
-    )
+    throw new ApiError(unreachableMessage(), 0)
   }
 
   if (!response.ok) {

@@ -1,4 +1,4 @@
-import { ApiError, apiGet, apiPost, describeErrorBody } from './api'
+import { ApiError, apiGet, apiPost, describeErrorBody, unreachableMessage } from './api'
 import { supabase } from './supabase'
 
 /* =============================================================================
@@ -438,11 +438,7 @@ async function apiPatch(path: string, body: unknown): Promise<Response> {
       body: JSON.stringify(body),
     })
   } catch {
-    throw new ApiError(
-      `Could not reach the API at ${API_BASE_URL || 'this origin'}. ` +
-        'Check VITE_API_BASE_URL and that the FastAPI service is running.',
-      0,
-    )
+    throw new ApiError(unreachableMessage(), 0)
   }
 
   if (!response.ok) {

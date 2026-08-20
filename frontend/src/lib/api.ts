@@ -81,13 +81,8 @@ export async function apiPost(path: string, body?: unknown): Promise<Response> {
       body: body === undefined ? undefined : JSON.stringify(body),
     })
   } catch {
-    // A network-level failure here almost always means VITE_API_BASE_URL is
-    // unset or the API is not running. Say that, rather than "Failed to fetch".
-    throw new ApiError(
-      `Could not reach the API at ${API_BASE_URL || 'this origin'}. ` +
-        'Check VITE_API_BASE_URL and that the FastAPI service is running.',
-      0,
-    )
+    // "Failed to fetch" is what the browser says. It is never what happened.
+    throw new ApiError(unreachableMessage(), 0)
   }
 
   if (!response.ok) {
@@ -121,11 +116,7 @@ export async function apiGet<T>(path: string): Promise<T> {
       headers: { Authorization: `Bearer ${token}` },
     })
   } catch {
-    throw new ApiError(
-      `Could not reach the API at ${API_BASE_URL || 'this origin'}. ` +
-        'Check VITE_API_BASE_URL and that the FastAPI service is running.',
-      0,
-    )
+    throw new ApiError(unreachableMessage(), 0)
   }
 
   if (!response.ok) {
@@ -137,6 +128,47 @@ export async function apiGet<T>(path: string): Promise<T> {
   }
 
   return (await response.json()) as T
+}
+
+/**
+ * What to say when `fetch` itself rejects, which is a different failure from
+ * any status code.
+ *
+ * A rejected `fetch` means the request never left, or left and was refused
+ * before a response existed. The browser deliberately tells JavaScript nothing
+ * about which — a page must not be able to probe what is on another origin — so
+ * the message has to name the small set of things it can actually be. The old
+ * one named the wrong one first: "check that the FastAPI service is running"
+ * sends someone to restart a service that is up and idle.
+ *
+ * THE TWO CASES ARE NOT THE SAME PROBLEM
+ * ======================================
+ * With no base URL, the request went to whatever serves the console. On a
+ * static host that is a file server with no API on it, and no amount of
+ * restarting anything changes that — the fix is a rebuild, because Vite bakes
+ * `VITE_API_BASE_URL` into the bundle at build time.
+ *
+ * With a base URL, the likeliest cause is CORS rather than an outage: the
+ * console and the API are on different origins by construction, so the API must
+ * name this origin in `CORS_ALLOWED_ORIGINS` or the browser refuses the request
+ * before sending it. That refusal leaves no trace in the API's log, which is
+ * what makes it look like a network problem for far longer than it should.
+ */
+export function unreachableMessage(): string {
+  if (!API_BASE_URL) {
+    return (
+      'This console was built without an API address, so the request went to the static ' +
+      'host serving these pages, which has no API on it. Set VITE_API_BASE_URL to the ' +
+      'FastAPI service and redeploy — it is baked in at build time, so a reload will not ' +
+      'pick it up.'
+    )
+  }
+  const here = typeof window === 'undefined' ? 'this origin' : window.location.origin
+  return (
+    `Could not reach the API at ${API_BASE_URL}. Either it is not running, or it is ` +
+    `running and does not allow requests from ${here} — check CORS_ALLOWED_ORIGINS on ` +
+    'the service. A refused request never arrives, so the API log is empty either way.'
+  )
 }
 
 /** Longest raw body pasted into an error message before it is cut short. */
