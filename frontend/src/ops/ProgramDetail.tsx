@@ -46,6 +46,7 @@ import {
   Skeleton,
   TableSkeleton,
   Tabs,
+  TaskStatusPill,
   Toolbar,
   UrgencyPill,
 } from '../components/ui'
@@ -71,6 +72,31 @@ export function ProgramDetail() {
   // stage cards is a lot of scrolling to answer "did anyone raise the work
   // order?", and the chips only narrow by rhythm.
   const [search, setSearch] = useState('')
+
+  /**
+   * Which checklist rows are expanded.
+   *
+   * A SET rather than a single id, so several rows can be open at once. The
+   * screen this replaced rendered four controls — due date, cadence, owner,
+   * status — on every one of thirty-seven rows at all times, which pushed each
+   * title into three wrapped lines and made the checklist several screens tall
+   * before anyone had done anything. Collapsed, the same list is a page. But
+   * setting due dates across a stage is a real task, and a single-open
+   * accordion would make that a sequence of open-edit-close, so opening one row
+   * does not close another.
+   */
+  const [openTasks, setOpenTasks] = useState<ReadonlySet<string>>(() => new Set())
+
+  function toggleTask(id: string) {
+    setOpenTasks((prev) => {
+      const next = new Set(prev)
+      if (!next.delete(id)) next.add(id)
+      return next
+    })
+  }
+
+  /** Which batch is being edited. `null` means the modal is adding a new one. */
+  const [editingBatch, setEditingBatch] = useState<Batch | null>(null)
 
   const programQuery = useQuery({
     queryKey: qk.programs.one(programId),
@@ -205,6 +231,16 @@ export function ProgramDetail() {
     () => tasks.filter((t) => URGENT_BANDS.includes(deriveUrgency(t))),
     [tasks],
   )
+
+  /** Owner id -> display name, so a collapsed row can name who has it without
+   *  scanning the whole profile list on every render. */
+  const ownerNames = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const p of ownersQuery.data?.rows ?? []) {
+      map.set(p.id, p.full_name ?? p.id.slice(0, 8))
+    }
+    return map
+  }, [ownersQuery.data?.rows])
 
   const cadenceCounts = useMemo(() => {
     const counts = Object.fromEntries(CADENCES.map((c) => [c, 0])) as Record<
@@ -533,36 +569,109 @@ export function ProgramDetail() {
                       </div>
 
                       <ul className="divide-y divide-line-soft">
-                        {items.map((task) => (
-                          <li
-                            key={task.id}
-                            className="flex items-start gap-3 px-4 py-2.5 hover:bg-surface-2/60 transition"
-                          >
-                            <input
-                              type="checkbox"
-                              className="mt-1 h-4 w-4 shrink-0 accent-[var(--color-accent)] cursor-pointer"
-                              checked={task.status === 'done'}
-                              onChange={(e) =>
-                                patchTask.mutate({
-                                  taskId: task.id,
-                                  patch: { status: e.target.checked ? 'done' : 'pending' },
-                                })
-                              }
-                              aria-label={task.title}
-                            />
+                        {items.map((task) => {
+                          const open = openTasks.has(task.id)
+                          const overdue =
+                            task.status !== 'done' && URGENT_BANDS.includes(deriveUrgency(task))
+                          return (
+                          <li key={task.id} className="hover:bg-surface-2/60 transition">
+                            {/* THE COLLAPSED ROW. One line, and it stays one
+                                line: the title truncates rather than wrapping,
+                                because thirty-seven rows that each grow to fit
+                                their longest word is what made this list
+                                unreadable. The full title is in the expanded
+                                panel and in the `title` attribute.
 
-                            <div className="min-w-0 flex-1">
-                              <p
-                                className={`text-sm leading-snug ${
-                                  task.status === 'done'
-                                    ? 'text-ink-3 line-through'
-                                    : 'text-ink'
-                                }`}
+                                The checkbox is a SIBLING of the disclosure
+                                button, not a child. Nesting a control inside a
+                                button is invalid, and it would also mean every
+                                attempt to tick something off toggled the panel
+                                open — the single most common action on this
+                                screen made annoying to serve the second most. */}
+                            <div className="flex items-center gap-3 px-4 py-2">
+                              <input
+                                type="checkbox"
+                                className="h-4 w-4 shrink-0 accent-[var(--color-accent)] cursor-pointer"
+                                checked={task.status === 'done'}
+                                onChange={(e) =>
+                                  patchTask.mutate({
+                                    taskId: task.id,
+                                    patch: { status: e.target.checked ? 'done' : 'pending' },
+                                  })
+                                }
+                                aria-label={`Mark ${task.title} done`}
+                              />
+
+                              <button
+                                type="button"
+                                onClick={() => toggleTask(task.id)}
+                                aria-expanded={open}
+                                aria-controls={`task-panel-${task.id}`}
+                                title={task.title}
+                                className="min-w-0 flex-1 flex items-center gap-3 text-left py-0.5"
                               >
-                                {task.title}
-                              </p>
+                                <span
+                                  className={`text-sm truncate ${
+                                    task.status === 'done'
+                                      ? 'text-ink-3 line-through'
+                                      : 'text-ink'
+                                  }`}
+                                >
+                                  {task.title}
+                                </span>
+
+                                {/* The three facts worth seeing without opening
+                                    anything: when it is due, who has it, what
+                                    state it is in. Everything else is a click
+                                    away. */}
+                                <span className="ml-auto flex items-center gap-2 shrink-0">
+                                  {task.status !== 'done' && task.due_date && (
+                                    <span
+                                      className={`hidden sm:inline text-[11px] tabular-nums ${
+                                        overdue ? 'font-medium text-bad-ink' : 'text-ink-3'
+                                      }`}
+                                    >
+                                      {fmtDate(task.due_date)}
+                                    </span>
+                                  )}
+                                  {task.owner_id && (
+                                    <span className="hidden md:inline text-[11px] text-ink-3 truncate max-w-28">
+                                      {ownerNames.get(task.owner_id) ?? 'Assigned'}
+                                    </span>
+                                  )}
+                                  <TaskStatusPill status={task.status} />
+                                  <svg
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    aria-hidden
+                                    className={`text-ink-3 transition-transform ${
+                                      open ? 'rotate-90' : ''
+                                    }`}
+                                  >
+                                    <path
+                                      d="M9 5l7 7-7 7"
+                                      stroke="currentColor"
+                                      strokeWidth="2"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                    />
+                                  </svg>
+                                </span>
+                              </button>
+                            </div>
+
+                            {/* THE EXPANDED PANEL. Indented to the title's left
+                                edge so it reads as belonging to the row above
+                                rather than as a new row. */}
+                            {open && (
+                            <div
+                              id={`task-panel-${task.id}`}
+                              className="px-4 pb-3 pl-11 animate-in"
+                            >
                               {task.description && (
-                                <p className="text-xs text-ink-3 mt-0.5 leading-snug">
+                                <p className="text-xs text-ink-3 mb-2 leading-snug max-w-prose">
                                   {task.description}
                                 </p>
                               )}
@@ -627,12 +736,15 @@ export function ProgramDetail() {
                                   />
                                 </div>
                               )}
-                            </div>
 
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              {/* A due date is what makes urgency mean anything —
-                                  without one every task sits in 'unscheduled'
-                                  and Needs-attention stays empty forever. */}
+                              {/* The four editing controls. They wrap now
+                                  instead of competing with the title for one
+                                  row's width, which is what squeezed titles
+                                  into three lines. */}
+                              <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
+                                {/* A due date is what makes urgency mean anything —
+                                    without one every task sits in 'unscheduled'
+                                    and Needs-attention stays empty forever. */}
                               <Input
                                 type="date"
                                 className="!h-7 !w-32 !text-xs !px-2"
@@ -696,9 +808,12 @@ export function ProgramDetail() {
                                 <option value="done">Done</option>
                                 <option value="blocked">Blocked</option>
                               </Select>
+                              </div>
                             </div>
+                            )}
                           </li>
-                        ))}
+                          )
+                        })}
                       </ul>
                     </Card>
                   )
@@ -746,20 +861,37 @@ export function ProgramDetail() {
                         </div>
                         <ul className="divide-y divide-line-soft">
                           {cohort.map((b) => (
-                            <li key={b.id} className="px-4 py-3">
-                              <p className="text-sm font-medium text-ink">{b.name}</p>
-                              <p className="text-xs text-ink-3 mt-0.5">
-                                {[b.branch, b.section].filter(Boolean).join(' · ') ||
-                                  'No branch set'}
-                                {b.expected_student_count != null &&
-                                  ` · ${b.expected_student_count} students`}
-                              </p>
-                              {b.passout_year == null && (
-                                <p className="text-xs text-warn mt-1">
-                                  Created before passout year was tracked — set it so this
-                                  cohort can be told apart from next year&apos;s.
+                            <li key={b.id} className="px-4 py-3 flex items-start gap-3">
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm font-medium text-ink">{b.name}</p>
+                                <p className="text-xs text-ink-3 mt-0.5">
+                                  {[b.branch, b.section].filter(Boolean).join(' · ') ||
+                                    'No branch set'}
+                                  {b.expected_student_count != null &&
+                                    ` · ${b.expected_student_count} students`}
                                 </p>
-                              )}
+                                {b.passout_year == null && (
+                                  <p className="text-xs text-warn-ink mt-1">
+                                    Created before passout year was tracked — Edit to set it,
+                                    so this cohort can be told apart from next year&apos;s.
+                                  </p>
+                                )}
+                              </div>
+                              {/* The branch, section and headcount on a batch
+                                  are the facts most likely to be wrong on day
+                                  one and most likely to be noticed by whoever
+                                  is standing in the room. Until now the only
+                                  way to correct one was to ask someone with
+                                  database access — the RLS policy has always
+                                  allowed this edit, nothing ever offered it. */}
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => setEditingBatch(b)}
+                                aria-label={`Edit ${b.name}`}
+                              >
+                                Edit
+                              </Button>
                             </li>
                           ))}
                         </ul>
@@ -783,10 +915,16 @@ export function ProgramDetail() {
         )}
       </Page>
 
-      <AddBatchModal
-        open={addingBatch}
+      {/* `key` resets the form between batches — see BatchModal's header. */}
+      <BatchModal
+        key={editingBatch?.id ?? 'new'}
+        open={addingBatch || editingBatch !== null}
         programId={program.id}
-        onClose={() => setAddingBatch(false)}
+        batch={editingBatch}
+        onClose={() => {
+          setAddingBatch(false)
+          setEditingBatch(null)
+        }}
       />
     </>
   )
@@ -815,42 +953,73 @@ function groupByPassoutYear(batches: Batch[]): [number | null, Batch[]][] {
   })
 }
 
-function AddBatchModal({
+/**
+ * Add a batch, or correct one that already exists.
+ *
+ * ONE COMPONENT FOR BOTH, because the fields, the validation and the copy are
+ * identical — a separate edit modal would be the same form twice, and the
+ * second copy is the one that drifts.
+ *
+ * THE CALLER PASSES A `key`. Every field below seeds its `useState` from
+ * `batch`, and a seeded initialiser only runs on mount; without a key that
+ * changes with the batch, opening a second batch would show the first one's
+ * values, and saving would write them onto the wrong cohort. Keying the element
+ * remounts it, which is React's own answer to "reset this form" and cheaper to
+ * read than a useEffect that copies props into state.
+ *
+ * WHO CAN SAVE IS NOT DECIDED HERE. `batches_internal_all` (migration 2300) is
+ * `for all` to any internal persona whose reach covers the program, so an LDE
+ * Executive may correct a batch at their own college — which is the point: they
+ * are the ones on campus who know the section moved or the headcount changed.
+ * This form does not check that, and must not; Postgres does, per R5. What the
+ * form owes the user is the REASON when the database says no, which is what the
+ * error note at the bottom is for.
+ */
+function BatchModal({
   open,
   programId,
+  batch,
   onClose,
 }: {
   open: boolean
   programId: string
+  /** The batch being corrected, or null to create a new one. */
+  batch: Batch | null
   onClose: () => void
 }) {
   const queryClient = useQueryClient()
-  const [name, setName] = useState('')
-  const [branch, setBranch] = useState('')
-  const [section, setSection] = useState('')
-  const [passoutYear, setPassoutYear] = useState('')
-  const [count, setCount] = useState('')
+  const editing = batch !== null
+  const [name, setName] = useState(batch?.name ?? '')
+  const [branch, setBranch] = useState(batch?.branch ?? '')
+  const [section, setSection] = useState(batch?.section ?? '')
+  const [passoutYear, setPassoutYear] = useState(
+    batch?.passout_year != null ? String(batch.passout_year) : '',
+  )
+  const [count, setCount] = useState(
+    batch?.expected_student_count != null ? String(batch.expected_student_count) : '',
+  )
 
-  const add = useMutation({
-    mutationFn: () =>
-      unwrap(
-        supabase.from('batches').insert({
-          program_id: programId,
-          name,
-          branch: branch || null,
-          section: section || null,
-          // Required by the form, so never null on a new row. The column stays
-          // nullable in the database only for rows that predate migration 1500.
-          passout_year: Number(passoutYear),
-          expected_student_count: count ? Number(count) : null,
-        }),
-      ),
+  const save = useMutation({
+    mutationFn: () => {
+      const values = {
+        name,
+        branch: branch || null,
+        section: section || null,
+        // Required by the form, so never null on a row this screen writes. The
+        // column stays nullable in the database only for rows that predate
+        // migration 1500 — correcting one of those is exactly what the warning
+        // on the batch row is asking for.
+        passout_year: Number(passoutYear),
+        expected_student_count: count ? Number(count) : null,
+      }
+      // `program_id` is deliberately absent from the update. Moving a batch
+      // between programs would move its deployments, attendance and payouts
+      // with it, and that is not a correction — it is a migration.
+      return batch
+        ? unwrap(supabase.from('batches').update(values).eq('id', batch.id))
+        : unwrap(supabase.from('batches').insert({ program_id: programId, ...values }))
+    },
     onSuccess: () => {
-      setName('')
-      setBranch('')
-      setSection('')
-      setPassoutYear('')
-      setCount('')
       void queryClient.invalidateQueries({ queryKey: qk.batches.all })
       onClose()
     },
@@ -858,11 +1027,11 @@ function AddBatchModal({
 
   function onSubmit(e: FormEvent) {
     e.preventDefault()
-    add.mutate()
+    save.mutate()
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Add batch">
+    <Modal open={open} onClose={onClose} title={editing ? `Edit ${batch.name}` : 'Add batch'}>
       <form onSubmit={onSubmit} className="space-y-4">
         <Field label="Batch name">
           <Input
@@ -903,13 +1072,13 @@ function AddBatchModal({
             placeholder="60"
           />
         </Field>
-        {add.error && <ErrorNote>{errorMessage(add.error)}</ErrorNote>}
+        {save.error && <ErrorNote>{errorMessage(save.error)}</ErrorNote>}
         <div className="flex justify-end gap-2">
           <Button type="button" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" variant="primary" disabled={add.isPending}>
-            Add batch
+          <Button type="submit" variant="primary" disabled={save.isPending}>
+            {editing ? 'Save changes' : 'Add batch'}
           </Button>
         </div>
       </form>
